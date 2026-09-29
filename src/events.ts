@@ -29,7 +29,8 @@ export interface RawContractEvent {
   value: string;
 }
 
-export interface ParsedEventBase {
+export interface ParsedEvent<T = object> {
+  type: TrustFlowEventType;
   contractId: string;
   ledger: number;
   timestamp: string;

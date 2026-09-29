@@ -28,4 +28,7 @@ export {
   buildDisputeArgs,
   buildVoteArgs,
 } from './build';
+export type { SimulationResult } from './simulate';
+export { SorobanSpec } from './spec';
+export type { SorobanSpecInput, SorobanUnionValue } from './spec';
 export type { SimulationResult, SimulateContractCallOptions } from './simulate';

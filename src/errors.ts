@@ -1,6 +1,7 @@
 export type TrustFlowErrorCode =
   | 'CONNECTION_ERROR'
   | 'CONTRACT_ERROR'
+  | 'INVALID_CONTRACT_CALL'
   | 'VALIDATION_ERROR'
   | 'UNAUTHORIZED'
   | 'NOT_FOUND'

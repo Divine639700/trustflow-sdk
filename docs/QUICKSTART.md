@@ -59,54 +59,67 @@ if (result.ok) {
 }
 ```
 
-### Using `createEscrow` function directly
+### Creating an escrow without the builder
 
 ```typescript
-import { TrustFlowClient } from '@trustflow/sdk';
-import { createEscrow } from '@trustflow/sdk/escrow';
-import { xlmToStroops } from '@trustflow/sdk/utils';
+import { TrustFlowEscrowClient } from '@trustflow/sdk';
 
-const client = new TrustFlowClient({
+const escrowClient = new TrustFlowEscrowClient({
   contractId: process.env.TRUSTFLOW_CONTRACT_ID!,
   network: 'TESTNET',
-});
-await client.connect();
-
-const escrow = await createEscrow(client, {
-  sender: 'GSENDER...',
-  recipient: 'GRECIPIENT...',
-  amountStroops: xlmToStroops('50'), // 50 XLM → stroops
-  durationBlocks: 17280,
-  metadata: { orderId: 'ORD-001', description: 'Freelance payment' },
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015',
 });
 
-console.log('Escrow created:', escrow.id);
-console.log('Amount (stroops):', escrow.amount.toString());
+const result = await escrowClient.createEscrow({
+  depositor: 'GDEPOSITOR...',
+  beneficiary: 'GBENEFICIARY...',
+  amountXLM: '50',
+  deadlineBlocks: 17280,
+});
+if (result.ok) console.log('Escrow ID:', result.data.escrowId);
 ```
 
 ---
 
-## 3. Fund / Release an Escrow
+## 3. Fund an Escrow
 
 ```typescript
-import { TrustFlowClient } from '@trustflow/sdk';
-import { releaseEscrow } from '@trustflow/sdk/escrow';
-import { connectWallet } from '@trustflow/sdk/wallet';
+import { TrustFlowEscrowClient } from '@trustflow/sdk';
 
-const wallet = await connectWallet('freighter');
-
-const client = new TrustFlowClient({
+const escrowClient = new TrustFlowEscrowClient({
   contractId: process.env.TRUSTFLOW_CONTRACT_ID!,
   network: 'TESTNET',
-});
-await client.connect();
-
-const txHash = await releaseEscrow(client, {
-  escrowId: 'escrow-1234567890',
-  caller: wallet.publicKey,
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015',
 });
 
-console.log('Released! Transaction:', txHash);
+// Omit the token address for the escrow's native asset; pass the USDC
+// Soroban token contract address to fund with USDC instead.
+const tokenAddress = process.env.USDC_CONTRACT_ID;
+const result = await escrowClient.fund(
+  'escrow-1234567890',
+  'GDEPOSITOR...',
+  500_000_000n,
+  tokenAddress,
+);
+if (result.ok) console.log('Funded! Transaction:', result.data.txHash);
+```
+
+### Release an Escrow
+
+```typescript
+import { TrustFlowEscrowClient } from '@trustflow/sdk';
+
+const escrowClient = new TrustFlowEscrowClient({
+  contractId: process.env.TRUSTFLOW_CONTRACT_ID!,
+  network: 'TESTNET',
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+});
+
+const result = await escrowClient.releaseEscrow('escrow-1234567890', 'GDEPOSITOR...');
+if (result.ok) console.log('Released! Transaction:', result.data.txHash);
 ```
 
 ---
@@ -114,6 +127,14 @@ console.log('Released! Transaction:', txHash);
 ## 4. Check Balance
 
 ```typescript
+import { TrustFlowClient } from '@trustflow/sdk';
+
+const client = new TrustFlowClient({
+  contractId: process.env.TRUSTFLOW_CONTRACT_ID!,
+  network: 'TESTNET',
+});
+await client.connect();
+
 const balance = await client.getBalance('GDEPOSITOR...');
 console.log(`Balance: ${balance} XLM`);
 ```
@@ -124,11 +145,17 @@ console.log(`Balance: ${balance} XLM`);
 
 ```typescript
 import { DisputeClient } from '@trustflow/sdk';
+import type { ContractConfig } from '@trustflow/sdk';
 
-const disputes = new DisputeClient(
-  'https://api.trustflow.xyz',
-  process.env.AUTH_TOKEN!,
-);
+const config: ContractConfig = {
+  contractId: process.env.TRUSTFLOW_CONTRACT_ID!,
+  network: 'TESTNET',
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+  apiBaseUrl: process.env.TRUSTFLOW_API_URL!,
+  apiKey: process.env.AUTH_TOKEN!,
+};
+const disputes = new DisputeClient(config);
 
 const result = await disputes.raiseDispute({
   escrowId: 'escrow-1234567890',
@@ -139,6 +166,9 @@ const result = await disputes.raiseDispute({
 if (result.ok) {
   console.log('Dispute raised:', result.data.disputeId);
 }
+
+const details = await disputes.getDispute('escrow-1234567890');
+if (details.ok) console.log('Dispute details:', details.data);
 ```
 
 ---
@@ -157,6 +187,10 @@ const client = new MultiSigEscrowClient({
   rpcUrl: 'https://soroban-testnet.stellar.org',
   networkPassphrase: Networks.TESTNET,
 });
+const APPROVER_A = 'GAPPROVER_A...';
+const APPROVER_B = 'GAPPROVER_B...';
+const SIGNED_XDR_A = process.env.SIGNED_XDR_A!;
+const SIGNED_XDR_B = process.env.SIGNED_XDR_B!;
 
 // Register a 2-of-2 release operation
 const init = client.initMultiSigOperation({
@@ -185,6 +219,8 @@ if (result.ok) console.log('Released! tx:', result.data.txHash);
 ## 7. Paginated Gig Listing
 
 ```typescript
+import { TrustFlowEscrowClient } from '@trustflow/sdk';
+
 const escrowClient = new TrustFlowEscrowClient({
   contractId: process.env.TRUSTFLOW_CONTRACT_ID!,
   network: 'TESTNET',
@@ -203,15 +239,80 @@ do {
 } while (cursor);
 ```
 
+## 8. Juror Voting
+
+`JurorClient` supports plaintext and caller-encrypted votes. See the
+[README voting guide](../README.md#juror-voting) for the supported vote shapes and encryption details.
+
+```typescript
+import { JurorClient } from '@trustflow/sdk';
+
+const jurors = new JurorClient({
+  contractId: process.env.TRUSTFLOW_CONTRACT_ID!,
+  network: 'TESTNET',
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+});
+const result = await jurors.vote({
+  disputeId: 'dsp-1',
+  jurorAddress: 'GJUROR...',
+  vote: { encrypted: false, choice: 'approve' },
+});
+if (result.ok) console.log('Vote transaction:', result.data.txHash);
+```
+
+## 9. User Profiles
+
+See [ProfileClient in the API reference](./API.md#profileclient) for all profile methods.
+
+```typescript
+import { ProfileClient } from '@trustflow/sdk';
+
+const profiles = new ProfileClient(process.env.TRUSTFLOW_API_URL!, process.env.AUTH_TOKEN!);
+const result = await profiles.getProfile('GUSER...');
+if (result.ok) console.log('Display name:', result.data.displayName);
+```
+
+## 10. IPFS Upload and Contract Events
+
+The [README IPFS section](../README.md#ipfs-storage) has upload options and details.
+For event subscriptions and parsing, see [EscrowMonitor and event parsing](./API.md#escrowmonitor).
+
+```typescript
+import { TrustFlowClient, EscrowMonitor, parseEvents } from '@trustflow/sdk';
+import type { RawContractEvent } from '@trustflow/sdk';
+
+const client = new TrustFlowClient({
+  contractId: process.env.TRUSTFLOW_CONTRACT_ID!,
+  network: 'TESTNET',
+  ipfs: { apiKey: process.env.IPFS_API_KEY },
+});
+const fileBuffer = Buffer.from('evidence');
+const upload = await client.storage.upload(fileBuffer, { filename: 'evidence.pdf' });
+if (upload.ok) console.log('Uploaded:', upload.data.url);
+
+const rawEvents: RawContractEvent[] = [];
+const events = parseEvents(rawEvents, client.contractId);
+console.log('Parsed events:', events);
+
+const monitor = new EscrowMonitor();
+monitor.on('escrow.released', (event) => console.log('Escrow released:', event.escrowId));
+```
+
 ---
 
 ## Environment Variables
 
 ```bash
 TRUSTFLOW_CONTRACT_ID=C...          # Soroban contract address
-API_KEY=your-api-key                # TrustFlow backend API key
-AUTH_TOKEN=your-jwt-token           # JWT for dispute/auth endpoints
+TRUSTFLOW_API_URL=https://api.trustflow.xyz # TrustFlow backend URL
+API_KEY=your-api-key                # Backend API key for paginated gig listing
+AUTH_TOKEN=your-jwt-token           # Bearer token for dispute/profile endpoints
+USDC_CONTRACT_ID=C...               # Optional Soroban USDC token contract for funding
+IPFS_API_KEY=your-ipfs-api-key      # Optional IPFS upload credential
 UNSIGNED_RELEASE_XDR=...            # Base64 XDR for multi-sig flows
+SIGNED_XDR_A=...                    # Signed XDR submitted by approver A
+SIGNED_XDR_B=...                    # Signed XDR submitted by approver B
 ```
 
 See [API Reference](./API.md) for the full method list and [examples/](../examples/) for runnable scripts.
