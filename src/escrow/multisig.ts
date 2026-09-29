@@ -1,4 +1,4 @@
-import { Transaction, xdr } from '@stellar/stellar-sdk';
+import { TransactionBuilder, Keypair, xdr } from '@stellar/stellar-sdk';
 import { TrustFlowError } from '../errors';
 import { logger } from '../utils/logger';
 import type { ContractConfig } from '../types/contract';
@@ -145,25 +145,34 @@ export class MultiSigEscrowClient {
       return { ok: false, error: `${params.signerAddress} has already signed this operation` };
     }
 
-    const xdrValidation = this._validateSignedXdr(params.signedXdr, operation.networkPassphrase);
-    if (!xdrValidation.ok) {
-      return xdrValidation;
+    // Verify the signed XDR: same transaction + valid signature from signer
+    const verification = this._verifySignedXdr(
+      params.signedXdr,
+      operation.unsignedXdr,
+      params.signerAddress,
+      operation.networkPassphrase,
+    );
+    if (!verification.ok) {
+      return verification;
     }
 
     const entry: SignatureEntry = {
       signerAddress: params.signerAddress,
       signedXdr: params.signedXdr,
       addedAt: Date.now(),
+      verified: true,
+      verifiedAt: Date.now(),
     };
     operation.collectedSignatures.push(entry);
     logger.debug('Multi-sig signature added', {
       operationId: params.operationId,
       signer: params.signerAddress,
       collected: operation.collectedSignatures.length,
+      verified: operation.collectedSignatures.filter((s) => s.verified).length,
       threshold: operation.threshold,
     });
 
-    if (operation.collectedSignatures.length >= operation.threshold) {
+    if (this._getVerifiedCount(operation) >= operation.threshold) {
       operation.status = 'ready';
     }
 
@@ -208,11 +217,12 @@ export class MultiSigEscrowClient {
       return { ok: false, error: 'Operation has expired' };
     }
 
-    if (operation.collectedSignatures.length < operation.threshold) {
-      const needed = operation.threshold - operation.collectedSignatures.length;
+    const verifiedCount = this._getVerifiedCount(operation);
+    if (verifiedCount < operation.threshold) {
+      const needed = operation.threshold - verifiedCount;
       return {
         ok: false,
-        error: `Threshold not met: need ${needed} more signature(s) before submission`,
+        error: `Threshold not met: need ${needed} more verified signature(s) before submission`,
       };
     }
 
@@ -254,14 +264,15 @@ export class MultiSigEscrowClient {
       return { ok: false, error: `Operation ${operationId} not found` };
     }
 
-    if (operation.collectedSignatures.length === 0) {
-      return { ok: false, error: 'No signatures collected yet' };
+    const verifiedSignatures = operation.collectedSignatures.filter((s) => s.verified);
+    if (verifiedSignatures.length === 0) {
+      return { ok: false, error: 'No verified signatures collected yet' };
     }
 
     try {
       const xdrResult = this._mergeSignatures(
         operation.unsignedXdr,
-        operation.collectedSignatures.map((s) => s.signedXdr),
+        verifiedSignatures,
       );
       return { ok: true, data: { xdr: xdrResult } };
     } catch (e) {
@@ -439,32 +450,93 @@ export class MultiSigEscrowClient {
   }
 
   /**
-   * Validates that a provided XDR is a parseable Stellar transaction envelope.
-   * Returns ok:false with a descriptive error on any parse failure.
+   * Extracts the transaction hash from a transaction envelope XDR.
+   * Works for both regular transactions (v0, v1) and fee-bump transactions.
+   * The hash is the network-specific hash that signatures are verified against.
    */
-  private _validateSignedXdr(
-    signedXdr: string,
-    networkPassphrase: string,
-  ): { ok: true } | { ok: false; error: string } {
-    try {
-      new Transaction(signedXdr, networkPassphrase);
-      return { ok: true };
-    } catch {
-      try {
-        // FeeBump transactions are also valid envelopes
-        xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
-        return { ok: true };
-      } catch {
-        return { ok: false, error: 'signedXdr is not a valid Stellar transaction envelope' };
-      }
-    }
+  private _getTransactionHash(envelopeXdr: string, networkPassphrase: string): Buffer {
+    const tx = TransactionBuilder.fromXDR(envelopeXdr, networkPassphrase);
+    return tx.hash();
   }
 
   /**
-   * Merges `DecoratedSignature` entries from all `signedXdrs` into the base envelope.
+   * Verifies that a signed XDR envelope:
+   * 1. Contains the same transaction as the base unsigned XDR (hash match)
+   * 2. Carries a valid signature from the claimed signer
+   * Returns the verified signature entry on success.
+   */
+  private _verifySignedXdr(
+    signedXdr: string,
+    baseXdr: string,
+    signerAddress: string,
+    networkPassphrase: string,
+  ): { ok: true; hash: Buffer; signature: xdr.DecoratedSignature } | { ok: false; error: string } {
+    // Parse both envelopes to get their hashes
+    let baseHash: Buffer;
+    let signedHash: Buffer;
+
+    try {
+      baseHash = this._getTransactionHash(baseXdr, networkPassphrase);
+    } catch (e) {
+      return { ok: false, error: `base unsignedXdr is invalid: ${String(e)}` };
+    }
+
+    try {
+      signedHash = this._getTransactionHash(signedXdr, networkPassphrase);
+    } catch (e) {
+      return { ok: false, error: `signedXdr is invalid: ${String(e)}` };
+    }
+
+    // 1. Verify transaction hash matches
+    if (!baseHash.equals(signedHash)) {
+      return {
+        ok: false,
+        error: 'signedXdr contains a different transaction than the base unsignedXdr',
+      };
+    }
+
+    // 2. Verify the signer's signature is present and valid
+    const signedEnvelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
+    const signatures = this._extractSignatures(signedEnvelope);
+
+    // Compute the signer's signature hint (last 4 bytes of public key)
+    const signerKeypair = Keypair.fromPublicKey(signerAddress);
+    const expectedHint = signerKeypair.signatureHint().toString('hex');
+
+    // Find a signature with matching hint
+    const matchingSig = signatures.find((sig) => sig.hint().toString('hex') === expectedHint);
+
+    if (!matchingSig) {
+      return {
+        ok: false,
+        error: `signedXdr does not contain a signature from ${signerAddress}`,
+      };
+    }
+
+    // Cryptographically verify the signature
+    if (!signerKeypair.verify(signedHash, matchingSig.signature())) {
+      return {
+        ok: false,
+        error: `signature from ${signerAddress} is invalid for this transaction`,
+      };
+    }
+
+    return { ok: true, hash: signedHash, signature: matchingSig };
+  }
+
+  /**
+   * Returns the number of cryptographically verified signatures in an operation.
+   */
+  private _getVerifiedCount(operation: MultiSigOperation): number {
+    return operation.collectedSignatures.filter((s) => s.verified).length;
+  }
+
+  /**
+   * Merges `DecoratedSignature` entries from verified signer entries into the base envelope.
+   * Only signatures from cryptographically verified entries are merged.
    * Deduplicates by signature hint to prevent double-counting the same signer.
    */
-  private _mergeSignatures(baseXdr: string, signedXdrs: string[]): string {
+  private _mergeSignatures(baseXdr: string, entries: SignatureEntry[]): string {
     const baseEnvelope = xdr.TransactionEnvelope.fromXDR(baseXdr, 'base64');
 
     // Collect all unique decorated signatures from contributor envelopes
@@ -481,9 +553,12 @@ export class MultiSigEscrowClient {
       }
     }
 
-    // Add new signatures from each contributor
-    for (const signedXdr of signedXdrs) {
-      const envelope = xdr.TransactionEnvelope.fromXDR(signedXdr, 'base64');
+    // Add new signatures from each verified contributor
+    for (const entry of entries) {
+      // Only merge signatures from verified entries
+      if (!entry.verified) continue;
+
+      const envelope = xdr.TransactionEnvelope.fromXDR(entry.signedXdr, 'base64');
       const sigs = this._extractSignatures(envelope);
       for (const sig of sigs) {
         const key = `${sig.hint().toString('hex')}:${sig.signature().toString('hex')}`;
@@ -548,19 +623,21 @@ export class MultiSigEscrowClient {
   }
 
   private _buildStatus(operation: MultiSigOperation): MultiSigStatus {
-    const signersSigned = operation.collectedSignatures.map((s) => s.signerAddress);
+    const verifiedEntries = operation.collectedSignatures.filter((s) => s.verified);
+    const signersSigned = verifiedEntries.map((s) => s.signerAddress);
     const signersRemaining = operation.signers.filter((s) => !signersSigned.includes(s));
+    const verifiedCount = verifiedEntries.length;
 
     return {
       operationId: operation.operationId,
       escrowId: operation.escrowId,
       operationType: operation.operationType,
-      signaturesCollected: operation.collectedSignatures.length,
+      signaturesCollected: verifiedCount,
       threshold: operation.threshold,
       signersAuthorised: [...operation.signers],
       signersSigned,
       signersRemaining,
-      isReady: operation.collectedSignatures.length >= operation.threshold,
+      isReady: verifiedCount >= operation.threshold,
       status: operation.status,
       createdAt: operation.createdAt,
       expiresAt: operation.expiresAt,
