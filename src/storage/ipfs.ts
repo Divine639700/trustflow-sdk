@@ -1,3 +1,5 @@
+import { isValidCid } from './cid';
+import { logger } from '../utils/logger';
 import type { SDKResult } from '../types/index';
 import type { AxiosInstance } from 'axios';
 import { createApiHttpClient, toApiErrorMessage } from '../utils/http';
@@ -125,9 +127,9 @@ export class IPFSStorage {
         },
       });
       const cid = response.data?.cid;
-      if (!cid) {
-        logger.warn('IPFS upload succeeded without CID');
-        return { ok: false, error: 'Upload succeeded but response did not include a CID' };
+      if (!cid || !isValidCid(cid)) {
+        logger.warn('IPFS upload returned invalid or missing CID', { cid });
+        return { ok: false, error: 'Upload succeeded but response did not include a valid CID' };
       }
       logger.info('IPFS upload succeeded', { cid });
       return { ok: true, data: { cid, url: `${this.gatewayUrl}/${cid}` } };

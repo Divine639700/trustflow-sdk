@@ -25,17 +25,29 @@ export type TrustFlowErrorCode =
   | 'INVALID_CONTRACT_CALL'
   | 'CIRCUIT_BREAKER_OPEN'
   | 'ACCOUNT_NOT_FOUND'
-  | 'UNSUPPORTED_ENVIRONMENT';
+  | 'UNSUPPORTED_ENVIRONMENT'
+  | 'VERSION_MISMATCH'
+  | 'USER_REJECTED';
 
 export class TrustFlowError extends Error {
   readonly code: TrustFlowErrorCode;
   readonly cause?: unknown;
+  readonly field?: string;
+  readonly issues?: any[];
 
-  constructor(message: string, code: TrustFlowErrorCode, cause?: unknown) {
+  constructor(
+    message: string,
+    code: TrustFlowErrorCode,
+    cause?: unknown,
+    field?: string,
+    issues?: any[],
+  ) {
     super(message);
     this.name = 'TrustFlowError';
     this.code = code;
     this.cause = cause;
+    this.field = field;
+    this.issues = issues;
   }
 
   static wrap(error: unknown, code: TrustFlowErrorCode = 'CONTRACT_ERROR'): TrustFlowError {
@@ -70,8 +82,14 @@ export class TrustFlowError extends Error {
     return new TrustFlowError(`Unauthorized to perform: ${action}`, 'UNAUTHORIZED');
   }
 
-  static validation(field: string, message: string): TrustFlowError {
-    return new TrustFlowError(`Validation failed for ${field}: ${message}`, 'VALIDATION_ERROR');
+  static validation(field: string, message: string, issues?: any[]): TrustFlowError {
+    return new TrustFlowError(
+      `Validation failed for ${field}: ${message}`,
+      'VALIDATION_ERROR',
+      undefined,
+      field,
+      issues,
+    );
   }
 
   static multiSigThresholdNotMet(collected: number, required: number): TrustFlowError {

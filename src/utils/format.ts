@@ -1,3 +1,111 @@
+import { TrustFlowError } from '../errors';
+
+/**
+ * Converts a decimal amount string to base units (e.g. XLM to stroops) with exact bigint arithmetic.
+ *
+ * @param amount - Decimal amount string (e.g. "1.5", "-0.0000001", "100")
+ * @param decimals - Number of decimal places for base units (e.g. 7 for XLM/stroops)
+ * @returns Amount in base units as a bigint
+ * @throws {TrustFlowError} If the amount is invalid, has too many decimal places, or uses scientific notation
+ */
+export function toBaseUnits(amount: string, decimals: number): bigint {
+  if (typeof amount !== 'string') {
+    throw TrustFlowError.validation('amount', `Amount must be a string, got ${typeof amount}`);
+  }
+  const trimmed = amount.trim();
+  if (!trimmed) {
+    throw TrustFlowError.validation('amount', 'Amount string cannot be empty');
+  }
+  if (!Number.isInteger(decimals) || decimals < 0) {
+    throw TrustFlowError.validation(
+      'decimals',
+      `Decimals must be a non-negative integer, got ${decimals}`,
+    );
+  }
+  if (/[eE]/.test(trimmed)) {
+    throw TrustFlowError.validation('amount', `Scientific notation is not supported: "${trimmed}"`);
+  }
+  const match = trimmed.match(/^([+-])?(\d+)?(?:\.(\d+))?$/);
+  if (!match || (!match[2] && !match[3])) {
+    throw TrustFlowError.validation('amount', `Invalid amount format: "${trimmed}"`);
+  }
+  const isNeg = match[1] === '-';
+  const wholeStr = match[2] ?? '0';
+  const fracStr = match[3] ?? '';
+
+  if (fracStr.length > decimals) {
+    throw TrustFlowError.validation(
+      'amount',
+      `Amount "${trimmed}" has ${fracStr.length} decimal places, exceeding maximum of ${decimals}`,
+    );
+  }
+
+  const whole = BigInt(wholeStr) * 10n ** BigInt(decimals);
+  const frac = fracStr ? BigInt(fracStr.padEnd(decimals, '0')) : 0n;
+  const total = whole + frac;
+
+  return isNeg ? -total : total;
+}
+
+/**
+ * Converts base units to a human-readable decimal string with exact bigint arithmetic.
+ *
+ * @param amount - Amount in base units (bigint, integer number, or integer string)
+ * @param decimals - Number of decimal places (e.g. 7 for XLM/stroops)
+ * @returns Formatted decimal string with trailing zeros removed
+ * @throws {TrustFlowError} If input is not an integer or decimals is negative
+ */
+export function fromBaseUnits(amount: bigint | number | string, decimals: number): string {
+  if (!Number.isInteger(decimals) || decimals < 0) {
+    throw TrustFlowError.validation(
+      'decimals',
+      `Decimals must be a non-negative integer, got ${decimals}`,
+    );
+  }
+  let big: bigint;
+  if (typeof amount === 'bigint') {
+    big = amount;
+  } else if (typeof amount === 'number') {
+    if (!Number.isInteger(amount)) {
+      throw TrustFlowError.validation(
+        'amount',
+        `Conversion from base units requires an integer number, got ${amount}`,
+      );
+    }
+    if (!Number.isSafeInteger(amount)) {
+      throw TrustFlowError.validation(
+        'amount',
+        `Amount ${amount} exceeds Number.MAX_SAFE_INTEGER; use bigint or string`,
+      );
+    }
+    big = BigInt(amount);
+  } else if (typeof amount === 'string') {
+    const trimmed = amount.trim();
+    if (!/^[+-]?\d+$/.test(trimmed)) {
+      throw TrustFlowError.validation('amount', `Invalid base units integer string: "${amount}"`);
+    }
+    big = BigInt(trimmed);
+  } else {
+    throw TrustFlowError.validation(
+      'amount',
+      `Expected bigint, number, or string, got ${typeof amount}`,
+    );
+  }
+
+  const isNeg = big < 0n;
+  const absVal = isNeg ? -big : big;
+  const divisor = 10n ** BigInt(decimals);
+  const whole = absVal / divisor;
+  const frac = absVal % divisor;
+  const prefix = isNeg ? '-' : '';
+
+  if (decimals === 0 || frac === 0n) {
+    return `${prefix}${whole.toString()}`;
+  }
+  const fracStr = frac.toString().padStart(decimals, '0').replace(/0+$/, '');
+  return `${prefix}${whole.toString()}.${fracStr}`;
+}
+
 /**
  * Converts stroops (smallest XLM unit) to a human-readable XLM string.
  *
@@ -11,19 +119,15 @@
  * stroopsToXLM(123_456_789n); // '12.3456789'
  * ```
  */
-export function stroopsToXLM(stroops: bigint | number): string {
-  const s = typeof stroops === 'number' ? BigInt(stroops) : stroops;
-  const whole = s / 10_000_000n;
-  const frac = s % 10_000_000n;
-  return frac === 0n
-    ? whole.toString()
-    : `${whole}.${frac.toString().padStart(7, '0').replace(/0+$/, '')}`;
+export function stroopsToXLM(stroops: bigint | number | string): string {
+  return fromBaseUnits(stroops, 7);
 }
 
 /**
  * Parses a human-readable XLM amount string into stroops.
  *
  * @param xlm - Amount in XLM (e.g., "1.5", "0.0000001")
+ * @param decimals - Decimal places (defaults to 7 for XLM)
  * @returns Amount in stroops as bigint
  * @throws {TrustFlowError} If the input is not a valid XLM amount
  *
@@ -34,16 +138,8 @@ export function stroopsToXLM(stroops: bigint | number): string {
  * parseAmount('0.0000001'); // 1n
  * ```
  */
-export function parseAmount(xlm: string): bigint {
-  const parts = xlm.split('.');
-  if (parts.length > 2) {
-    throw new Error(`Invalid XLM amount: ${xlm}`);
-  }
-  const whole = BigInt(parts[0] || '0') * 10_000_000n;
-  const frac = parts[1]
-    ? BigInt(parts[1].padEnd(7, '0').slice(0, 7))
-    : 0n;
-  return whole + frac;
+export function parseAmount(xlm: string | number, decimals = 7): bigint {
+  return toBaseUnits(typeof xlm === 'string' ? xlm : String(xlm), decimals);
 }
 
 /**
@@ -58,7 +154,7 @@ export function parseAmount(xlm: string): bigint {
  * formatAmount(10_000_000n); // '1 XLM'
  * ```
  */
-export function formatAmount(stroops: bigint | number): string {
+export function formatAmount(stroops: bigint | number | string): string {
   return stroopsToXLM(stroops);
 }
 

@@ -52,5 +52,7 @@ export {
   ReleaseEscrowSchema,
   DisputeEscrowSchema,
   ClientConfigSchema,
+  CidSchema,
+  parseRpcResponse,
 } from './schemas';
 export type { CreateEscrowInput, ReleaseEscrowInput, DisputeEscrowInput } from './schemas';

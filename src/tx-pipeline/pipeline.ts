@@ -14,7 +14,10 @@ import { classifyFailure, markTransient } from '../utils/transient';
 import { queueDepth, queueKey, runExclusive } from './queue';
 import type {
   AssembleParams,
+  EstimateFeeOptions,
   FeeBumpOptions,
+  FeeEstimate,
+  FeeRange,
   PipelineResult,
   PipelineSubmission,
   PrepareOptions,
@@ -290,6 +293,68 @@ export class TransactionPipeline {
   }
 
   /**
+   * Estimates resource fee, inclusion fee, and execution costs for a transaction.
+   *
+   * @param tx - The transaction to estimate fees for
+   * @param options - Fee estimation and retry options
+   * @returns Breakdown of resource and inclusion fees with cost footprint
+   */
+  async estimateFee(
+    tx: Transaction,
+    options?: EstimateFeeOptions,
+  ): Promise<PipelineResult<FeeEstimate>> {
+    const simulation = await this.simulate(tx, options);
+    if (!simulation.ok) {
+      return simulation;
+    }
+
+    const simData = simulation.data;
+    if (rpc.Api.isSimulationError(simData)) {
+      return fail(TrustFlowError.simulationFailed(simData.error));
+    }
+
+    const multiplier = options?.resourceFeeMultiplier ?? DEFAULT_RESOURCE_FEE_MULTIPLIER;
+    const multiplierBps = BigInt(Math.round(multiplier * 10000));
+    const minResourceFeeBig = BigInt(simData.minResourceFee || '0');
+    const resourceFee = ((minResourceFeeBig * multiplierBps + 9999n) / 10000n).toString();
+
+    let minInclusionFee = BigInt(tx.fee || BASE_FEE);
+    if (minInclusionFee <= 0n) {
+      minInclusionFee = BigInt(BASE_FEE);
+    }
+    const recommendedInclusionFee = minInclusionFee * 2n;
+    const maxInclusionFee = minInclusionFee * 10n;
+
+    const tolerance = options?.toleranceMultiplier ?? 1.0;
+    const tolBps = BigInt(Math.round(tolerance * 10000));
+
+    const inclusionFee: FeeRange = {
+      min: ((minInclusionFee * tolBps + 9999n) / 10000n).toString(),
+      recommended: ((recommendedInclusionFee * tolBps + 9999n) / 10000n).toString(),
+      max: ((maxInclusionFee * tolBps + 9999n) / 10000n).toString(),
+    };
+
+    const resFeeBig = BigInt(resourceFee);
+    const total: FeeRange = {
+      min: (resFeeBig + BigInt(inclusionFee.min)).toString(),
+      recommended: (resFeeBig + BigInt(inclusionFee.recommended)).toString(),
+      max: (resFeeBig + BigInt(inclusionFee.max)).toString(),
+    };
+
+    const cost = {
+      cpuInsns: String((simData as any).cost?.cpuInsns ?? '0'),
+      memBytes: String((simData as any).cost?.memBytes ?? (simData as any).cost?.memByte ?? '0'),
+    };
+
+    return ok({
+      resourceFee,
+      inclusionFee,
+      total,
+      cost,
+    });
+  }
+
+  /**
    * Simulates the transaction and folds the resulting footprint, auth
    * entries, and resource fee back onto a new copy of it, applying a safety
    * multiplier on top of the RPC-reported minimum resource fee. Retries on
@@ -312,7 +377,9 @@ export class TransactionPipeline {
         // `assembleTransaction` reads the resource fee off `transactionData`
         // itself (not `minResourceFee`), so the headroom must be written
         // onto the SorobanTransactionData builder for it to take effect.
-        const paddedFee = Math.ceil(Number(simulation.minResourceFee) * multiplier).toString();
+        const multiplierBps = BigInt(Math.round(multiplier * 10000));
+        const minResourceFeeBig = BigInt(simulation.minResourceFee || '0');
+        const paddedFee = ((minResourceFeeBig * multiplierBps + 9999n) / 10000n).toString();
         simulation.transactionData.setResourceFee(paddedFee);
         this.pipelineLogger.debug('Transaction prepared', { paddedFee, minResourceFee: simulation.minResourceFee });
 
@@ -333,7 +400,7 @@ export class TransactionPipeline {
   buildFeeBump(innerTx: Transaction, options: FeeBumpOptions): PipelineResult<FeeBumpTransaction> {
     this.pipelineLogger.debug('Building fee-bump transaction', { feeSource: options.feeSource });
     try {
-      const baseFee = options.baseFee ?? String(Number(BASE_FEE) * 10);
+      const baseFee = options.baseFee ?? (BigInt(BASE_FEE) * 10n).toString();
       const feeBump = TransactionBuilder.buildFeeBumpTransaction(
         options.feeSource,
         baseFee,
