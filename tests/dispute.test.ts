@@ -1,4 +1,5 @@
 import { DisputeClient } from '../src/escrow/dispute';
+import type { ContractConfig } from '../src/types/contract';
 
 const mockHttpPost = jest.fn();
 const mockHttpGet = jest.fn();
@@ -21,6 +22,33 @@ describe('DisputeClient', () => {
   it('initialises with api url and token', () => {
     const client = new DisputeClient({ apiBaseUrl: 'http://api', apiKey: 'tok' } as any);
     expect(client).toBeDefined();
+  });
+
+  it('initialises from ContractConfig with backend credentials', () => {
+    const config: ContractConfig = {
+      contractId: 'contract-id',
+      network: 'TESTNET',
+      rpcUrl: 'https://soroban-testnet.stellar.org',
+      networkPassphrase: 'Test SDF Network ; September 2015',
+      apiBaseUrl: 'http://api',
+      apiKey: 'tok',
+    };
+
+    expect(new DisputeClient(config)).toBeDefined();
+  });
+
+  it('requires backend URL and API key in ContractConfig', () => {
+    const config: ContractConfig = {
+      contractId: 'contract-id',
+      network: 'TESTNET',
+      rpcUrl: 'https://soroban-testnet.stellar.org',
+      networkPassphrase: 'Test SDF Network ; September 2015',
+    };
+
+    expect(() => new DisputeClient(config)).toThrow('apiBaseUrl is required');
+    expect(() => new DisputeClient({ ...config, apiBaseUrl: 'http://api' })).toThrow(
+      'apiKey is required',
+    );
   });
 
   it('returns success for raiseDispute when API responds with ID', async () => {

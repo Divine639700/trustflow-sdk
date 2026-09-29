@@ -1,6 +1,7 @@
 import { TrustFlowError } from '../errors';
 import { withTransientRetry } from '../utils/node-retry';
 import type { ApiRetryConfig } from '../utils/http';
+import { fetchWithTimeout } from '../utils/timeout';
 import { getNetworkConfig, StellarNetwork } from './network';
 
 export interface AccountInfo {
@@ -32,6 +33,13 @@ function unfundedAccount(address: string): AccountInfo {
  * jittered exponential backoff (`ApiRetryConfig`, passed through by
  * `TrustFlowClient.getAccountInfo`). Any other `4xx` fails immediately.
  *
+ * ### Timeouts
+ *
+ * `timeoutMs` bounds the raw `fetch` to Horizon; the request is aborted at
+ * the deadline and the failure surfaces as a `TIMEOUT` `TrustFlowError`
+ * (retried like any other transient failure while the budget lasts). It
+ * defaults to the SDK-wide 10s when omitted.
+ *
  * ### Why this can now throw
  *
  * It previously swallowed *every* failure and returned `isActive: false`, so a
@@ -42,15 +50,18 @@ function unfundedAccount(address: string): AccountInfo {
  * - `404` → `isActive: false` (the genuine "does not exist" case)
  * - any other `4xx` → throws `TrustFlowError` `NOT_FOUND`
  * - transport error / `5xx` / timeout after retries → throws `TrustFlowError`
- *   `CONNECTION_ERROR`
+ *   `CONNECTION_ERROR`, or `TIMEOUT` when the deadline fired
  *
  * @param address - Stellar `G...` public key
  * @param network - `'TESTNET'` or `'MAINNET'`
  * @param retry - Optional retry budget; defaults to
  *   {@link import('../utils/node-retry').DEFAULT_NODE_RETRY_CONFIG}
+ * @param horizonUrl - Optional Horizon base URL override
+ * @param timeoutMs - Optional request timeout in milliseconds
  * @returns The account's balance, sequence number and activation state
- * @throws {TrustFlowError} `NOT_FOUND` for a non-`404` client error, or
- *   `CONNECTION_ERROR` when Horizon stays unreachable
+ * @throws {TrustFlowError} `NOT_FOUND` for a non-`404` client error,
+ *   `CONNECTION_ERROR` when Horizon stays unreachable, or `TIMEOUT` when the
+ *   deadline fires
  *
  * @example
  * ```typescript
@@ -63,6 +74,7 @@ export async function fetchAccountInfo(
   network: StellarNetwork,
   retry?: ApiRetryConfig,
   horizonUrl?: string,
+  timeoutMs?: number,
 ): Promise<AccountInfo> {
   const effectiveHorizonUrl = horizonUrl ?? getNetworkConfig(network).horizonUrl;
 
@@ -70,7 +82,12 @@ export async function fetchAccountInfo(
   try {
     response = await withTransientRetry(
       async () => {
-        const res = await fetch(`${effectiveHorizonUrl}/accounts/${address}`);
+        const res = await fetchWithTimeout(
+          `${effectiveHorizonUrl}/accounts/${address}`,
+          undefined,
+          timeoutMs,
+          'horizon.fetchAccountInfo',
+        );
         if (res.ok) return res;
 
         // A 404 is an answer, not a failure: the account genuinely does not

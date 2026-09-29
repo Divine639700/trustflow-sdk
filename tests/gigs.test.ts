@@ -220,4 +220,36 @@ describe('TrustFlowEscrowClient.getGigs', () => {
     expect(resBadToken.error).toContain("Invalid tokenAddress");
   });
 
+  it("applies a client-wide timeoutMs from the shared config", async () => {
+    mockHttpGet.mockResolvedValueOnce({ data: makePage() });
+
+    const client = new TrustFlowEscrowClient({
+      ...BASE_CONTRACT_CONFIG,
+      apiBaseUrl: API_BASE,
+      timeoutMs: 25_000,
+    });
+    const result = await client.getGigs();
+
+    expect(result.ok).toBe(true);
+    expect(jest.mocked(createApiHttpClient)).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 25_000 }),
+    );
+  });
+
+  it("lets a per-call timeoutMs override the config value", async () => {
+    mockHttpGet.mockResolvedValueOnce({ data: makePage() });
+
+    const client = new TrustFlowEscrowClient({
+      ...BASE_CONTRACT_CONFIG,
+      apiBaseUrl: API_BASE,
+      timeoutMs: 25_000,
+    });
+    const result = await client.getGigs({}, { timeoutMs: 5_000 });
+
+    expect(result.ok).toBe(true);
+    expect(jest.mocked(createApiHttpClient)).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 5_000 }),
+    );
+  });
+
 });

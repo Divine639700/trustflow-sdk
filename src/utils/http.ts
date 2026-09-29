@@ -2,6 +2,9 @@ import axios, { AxiosError, AxiosInstance } from 'axios';
 import { readRetryAfterMs } from './transient';
 import { attachInterceptors } from './interceptors';
 import type { HttpInterceptors } from './interceptors';
+import { logger } from './logger';
+import { SDK_VERSION, DEFAULT_API_VERSION } from '../constants';
+import { DEFAULT_TIMEOUT_MS, isAxiosTimeoutError, axiosTimeoutMs } from './timeout';
 
 declare module 'axios' {
   export interface AxiosRequestConfig {
@@ -52,6 +55,12 @@ export interface ApiHttpClientOptions {
   baseURL: string;
   apiKey?: string;
   apiVersion?: string;
+  /**
+   * Per-request timeout in milliseconds. Defaults to
+   * {@link DEFAULT_TIMEOUT_MS} (10s). A timeout surfaces as a
+   * `Request timed out after <n>ms` message from {@link toApiErrorMessage},
+   * distinguishable from an ordinary transport failure.
+   */
   timeoutMs?: number;
   retry?: ApiRetryConfig;
   additionalHeaders?: Record<string, string>;
@@ -166,6 +175,10 @@ export function installApiRetryInterceptor(
   instance: AxiosInstance,
   config: Required<ApiRetryConfig>,
 ): void {
+  // Unit tests mock `axios.create` to return a bare object without
+  // `interceptors`; there is no way to hook responses there, so skip rather
+  // than throw (the logging interceptors below are optional-chained too).
+  if (!instance.interceptors?.response) return;
   instance.interceptors.response.use(undefined, async (error: AxiosError) => {
     const requestConfig = error.config as RetryableRequestConfig | undefined;
     // No config means the failure happened before a request was even built
@@ -230,7 +243,7 @@ export function createApiHttpClient(options: ApiHttpClientOptions): AxiosInstanc
 
   const instance = axios.create({
     baseURL: options.baseURL,
-    timeout: options.timeoutMs ?? 10_000,
+    timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     headers,
   });
 
@@ -248,7 +261,7 @@ export function createApiHttpClient(options: ApiHttpClientOptions): AxiosInstanc
   // that mock `axios.create` without interceptors keep working).
   instance.interceptors?.request?.use(
     (config) => {
-      httpLogger.debug('HTTP request', {
+      logger.debug('HTTP request', {
         method: config.method?.toUpperCase(),
         url: config.url,
         baseURL: config.baseURL,
@@ -256,14 +269,14 @@ export function createApiHttpClient(options: ApiHttpClientOptions): AxiosInstanc
       return config;
     },
     (error) => {
-      httpLogger.error('HTTP request error', { error: error.message });
+      logger.error('HTTP request error', { error: error.message });
       return Promise.reject(error);
     }
   );
 
   instance.interceptors?.response?.use(
     (response) => {
-      httpLogger.debug('HTTP response', {
+      logger.debug('HTTP response', {
         status: response.status,
         url: response.config.url,
         baseURL: response.config.baseURL,
@@ -272,7 +285,7 @@ export function createApiHttpClient(options: ApiHttpClientOptions): AxiosInstanc
     },
     (error) => {
       const status = error.response?.status;
-      httpLogger.warn('HTTP error response', {
+      logger.warn('HTTP error response', {
         status,
         url: error.config?.url,
         baseURL: error.config?.baseURL,
@@ -287,6 +300,12 @@ export function createApiHttpClient(options: ApiHttpClientOptions): AxiosInstanc
 
 /**
  * Maps unknown transport errors into stable SDK error strings.
+ *
+ * Timeouts are reported distinctly from other transport failures: an axios
+ * timeout becomes `Request timed out after <n>ms` (the configured budget,
+ * parsed off axios' own message) rather than the generic
+ * `Network error: timeout of <n>ms exceeded`, so callers can branch on
+ * "the server was slow" without string-matching axios internals.
  */
 export function toApiErrorMessage(error: unknown): string {
   if (error instanceof AxiosError) {
@@ -294,6 +313,10 @@ export function toApiErrorMessage(error: unknown): string {
     const statusText = error.response?.statusText;
     if (typeof status === 'number') {
       return statusText ? `HTTP ${status}: ${statusText}` : `HTTP ${status}`;
+    }
+    if (isAxiosTimeoutError(error)) {
+      const ms = axiosTimeoutMs(error);
+      return ms === undefined ? 'Request timed out' : `Request timed out after ${ms}ms`;
     }
     return `Network error: ${error.message}`;
   }

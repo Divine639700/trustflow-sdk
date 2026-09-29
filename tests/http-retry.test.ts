@@ -155,7 +155,13 @@ describe('createApiHttpClient', () => {
 
     createApiHttpClient({ baseURL: 'https://api.trustflow.xyz' });
 
-    expect(use).toHaveBeenCalledTimes(1);
+    // The retry interceptor registers no onFulfilled handler (`undefined`
+    // first arg); the response-logging interceptor registers two handlers.
+    // Exactly one `undefined`-first-arg registration means exactly one retry
+    // interceptor.
+    expect(use).toHaveBeenCalledTimes(2);
+    expect(use).toHaveBeenCalledWith(undefined, expect.any(Function));
+    expect(use.mock.calls.filter(([onFulfilled]) => onFulfilled === undefined)).toHaveLength(1);
   });
 });
 

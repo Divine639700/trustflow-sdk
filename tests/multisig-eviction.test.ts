@@ -1,8 +1,26 @@
+import { Account, Asset, BASE_FEE, Keypair, Networks, Operation, TransactionBuilder } from '@stellar/stellar-sdk';
 import { MultiSigEscrowClient } from '../src/escrow/multisig';
 
 describe('MultiSigEscrowClient automatic eviction', () => {
-  const NETWORK = 'Test SDF Network ; September 2015';
-  const XDR = 'AAAAAGXQAAAAAAAAAAA=';
+  const NETWORK = Networks.TESTNET;
+  const SIGNER = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 1));
+  // `initMultiSigOperation` validates that the base envelope parses, so this
+  // has to be a real transaction rather than a placeholder XDR.
+  const XDR = new TransactionBuilder(new Account(SIGNER.publicKey(), '1'), {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK,
+  })
+    .addOperation(
+      Operation.payment({
+        destination: Keypair.fromRawEd25519Seed(Buffer.alloc(32, 2)).publicKey(),
+        asset: Asset.native(),
+        amount: '1',
+      }),
+    )
+    .setTimeout(30)
+    .build()
+    .toEnvelope()
+    .toXDR('base64');
 
   function makeClient(retentionMs = 1000): MultiSigEscrowClient {
     return new MultiSigEscrowClient(
@@ -14,7 +32,7 @@ describe('MultiSigEscrowClient automatic eviction', () => {
   function initOperation(client: MultiSigEscrowClient, escrowId = 'escrow-1') {
     const result = client.initMultiSigOperation({
       escrowId,
-      signers: ['GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'],
+      signers: [SIGNER.publicKey()],
       threshold: 1,
       operationType: 'release',
       unsignedXdr: XDR,
@@ -37,7 +55,7 @@ describe('MultiSigEscrowClient automatic eviction', () => {
     const expiresAt = Date.now() + 1000;
     const result = client.initMultiSigOperation({
       escrowId: 'escrow-1',
-      signers: ['GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'],
+      signers: [SIGNER.publicKey()],
       threshold: 1,
       operationType: 'release',
       unsignedXdr: XDR,

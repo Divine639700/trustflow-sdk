@@ -166,6 +166,24 @@ describe('TrustFlowClient.getBalance retry behaviour', () => {
     });
     expect(loadAccount).toHaveBeenCalledTimes(1);
   });
+
+  it('surfaces TIMEOUT when the client-wide timeoutMs deadline fires', async () => {
+    const client = new TrustFlowClient({
+      contractId: CONTRACT,
+      retry: { retries: 0, retryDelayMs: 1, maxRetryDelayMs: 1 },
+      timeoutMs: 1,
+    });
+    // A loadAccount that never resolves: without the timeout the call would
+    // hang the test forever.
+    const loadAccount = jest
+      .spyOn(client.getServer(), 'loadAccount')
+      .mockImplementation(() => new Promise(() => {}));
+
+    await expect(client.getBalance(ALICE)).rejects.toMatchObject({
+      code: 'TIMEOUT',
+    });
+    expect(loadAccount).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('TrustFlowClient.connect retry behaviour', () => {
@@ -207,6 +225,20 @@ describe('TrustFlowClient.connect retry behaviour', () => {
 
     await expect(client.connect()).rejects.toMatchObject({ code: 'CONNECTION_ERROR' });
     expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces TIMEOUT when the client-wide timeoutMs deadline fires', async () => {
+    const client = new TrustFlowClient({
+      contractId: CONTRACT,
+      retry: { retries: 0, retryDelayMs: 1, maxRetryDelayMs: 1 },
+      timeoutMs: 1,
+    });
+    // A ledger lookup that never resolves: without the timeout the call would
+    // hang the test forever.
+    stubLedgers(client, jest.fn().mockImplementation(() => new Promise(() => {})));
+
+    await expect(client.connect()).rejects.toMatchObject({ code: 'TIMEOUT' });
+    expect(client.isConnected()).toBe(false);
   });
 });
 

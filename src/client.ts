@@ -1,4 +1,4 @@
-import { verifyApiCompatibility } from './utils/version';
+import { negotiateApiVersion } from './utils/version';
 import { Config, Horizon, rpc, xdr } from '@stellar/stellar-sdk';
 import {
   HORIZON_URLS,
@@ -8,9 +8,9 @@ import {
   SDK_VERSION,
   DEFAULT_API_VERSION,
 } from './constants';
-import { logger, type SDKLogger } from './utils/logger';
+import { logger, SDKLogger } from './utils/logger';
 import { TrustFlowError } from './errors';
-import type { Network, ClientConfig } from './types';
+import type { Network, ClientConfig, LoggingConfig } from './types';
 import { IPFSStorage } from './storage';
 import { SimpleCache } from './utils/cache';
 import { AccountManager } from './accounts/manager';
@@ -94,6 +94,11 @@ export class TrustFlowClient {
   readonly apiKey?: string;
   readonly version: string = SDK_VERSION;
   readonly apiVersion: string;
+  /**
+   * Default per-request timeout for Horizon and Soroban RPC calls. Every
+   * per-call timeout option overrides it; see {@link ClientConfig.timeoutMs}.
+   */
+  readonly timeoutMs?: number;
   /** IPFS upload helper — `client.storage.upload(file)`. */
   readonly storage: IPFSStorage;
   /** Every account this client can act as. See {@link TrustFlowClient.useAccount}. */
@@ -115,6 +120,7 @@ export class TrustFlowClient {
    * @param config.apiKey - Optional API key for authenticated requests
    * @param config.ipfs - Optional configuration for the built-in `storage.upload()` IPFS helper
    * @param config.retry - Optional retry budget for every network call (see {@link ClientConfig.retry})
+   * @param config.timeoutMs - Optional per-request timeout for Horizon and Soroban RPC calls (see {@link ClientConfig.timeoutMs})
    * @param config.accounts - Optional account contexts to register up front
    *
    * @example
@@ -161,6 +167,7 @@ export class TrustFlowClient {
     this.apiBaseUrl = config.apiBaseUrl;
     this.apiKey = config.apiKey;
     this.apiVersion = config.apiVersion ?? DEFAULT_API_VERSION;
+    this.timeoutMs = config.timeoutMs;
     this.retryConfig = config.ipfs ? { ...config.retry, ...config.ipfs.retry } : config.retry;
     this.storage = new IPFSStorage(config.ipfs);
     this.balanceCache = config.balanceCache
@@ -174,6 +181,35 @@ export class TrustFlowClient {
     for (const account of config.accounts ?? []) {
       this.accounts.add(account);
     }
+
+    // Initialize logger from config
+    this.logger = this.createLogger(config.logging);
+  }
+
+  private createLogger(logging?: LoggingConfig): SDKLogger {
+    if (logging?.logger) {
+      // Wrap custom logger in SDKLogger interface
+      const customLogger = logging.logger;
+      return new SDKLogger({
+        minLevel: 'silent',
+        logger: {
+          debug: (msg, ctx) => customLogger.debug(msg, ctx),
+          info: (msg, ctx) => customLogger.info(msg, ctx),
+          warn: (msg, ctx) => customLogger.warn(msg, ctx),
+          error: (msg, ctx) => customLogger.error(msg, ctx),
+        },
+      });
+    }
+    return new SDKLogger({
+      minLevel: logging?.level ?? 'error',
+      json: logging?.json,
+      prefix: 'TrustFlowClient',
+    });
+  }
+
+  /** Get the internal logger instance */
+  getLogger(): SDKLogger {
+    return this.logger;
   }
 
   // ---------------------------------------------------------------------------
@@ -348,7 +384,7 @@ export class TrustFlowClient {
       // Test connection by fetching ledger info
       await withTransientRetry(
         () => this.getServer().ledgers().limit(1).call(),
-        undefined,
+        { timeoutMs: this.timeoutMs },
         this.retryConfig,
         'horizon.ledgers',
       );
@@ -357,6 +393,9 @@ export class TrustFlowClient {
     } catch (error) {
       this._connected = false;
       this.logger.error('Failed to connect to Stellar network', { network: this.network, error });
+      // A timeout is its own diagnosis — keep the `TIMEOUT` code instead of
+      // burying it under a generic connection failure.
+      if (error instanceof TrustFlowError && error.code === 'TIMEOUT') throw error;
       throw new TrustFlowError('Failed to connect to Stellar network', 'CONNECTION_ERROR', error);
     }
   }
@@ -374,7 +413,12 @@ export class TrustFlowClient {
     if (!this.apiBaseUrl) {
       return { compatible: true, serverVersion: 'N/A', clientVersion: this.apiVersion };
     }
-    return verifyApiCompatibility(this.apiBaseUrl, this.apiVersion);
+    const result = await negotiateApiVersion(this.apiBaseUrl, { clientVersion: this.apiVersion });
+    return {
+      compatible: result.compatible,
+      serverVersion: result.serverVersion,
+      clientVersion: result.clientVersion,
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -413,7 +457,7 @@ export class TrustFlowClient {
     try {
       const account = await withTransientRetry(
         () => this.getServer().loadAccount(address),
-        undefined,
+        { timeoutMs: this.timeoutMs },
         this.retryConfig,
         'horizon.loadAccount',
       );
@@ -424,6 +468,8 @@ export class TrustFlowClient {
       this.balanceCache?.set(cacheKey, balance);
       return balance;
     } catch (error) {
+      // Keep a timeout distinguishable from a balance-fetch failure.
+      if (error instanceof TrustFlowError && error.code === 'TIMEOUT') throw error;
       throw new TrustFlowError(
         `Failed to fetch balance for ${address}`,
         'BALANCE_FETCH_ERROR',
@@ -455,12 +501,15 @@ export class TrustFlowClient {
     const account = this.accounts.require(options.account);
     try {
       return await withTransientRetry(
-        () => fetchAccountInfo(account.address, this.network, this.retryConfig, this.horizonUrl),
+        () => fetchAccountInfo(account.address, this.network, this.retryConfig, this.horizonUrl, this.timeoutMs),
         undefined,
         this.retryConfig,
         'horizon.accountInfo',
       );
     } catch (error) {
+      // A timed-out fetch keeps its `TIMEOUT` code rather than masquerading
+      // as a generic connection failure.
+      if (error instanceof TrustFlowError && error.code === 'TIMEOUT') throw error;
       throw new TrustFlowError(
         `Failed to fetch account info for ${account.address}`,
         'CONNECTION_ERROR',
@@ -538,6 +587,12 @@ export class TrustFlowClient {
    * reuse one connection rather than building a throwaway server per call.
    * Plain-http URLs are refused unless the Stellar SDK's global
    * `Config.setAllowHttp(true)` is set (e.g. for a local quickstart node).
+   *
+   * Note: the Stellar SDK's `rpc.Server` (v15.x) ignores its `timeout`
+   * constructor option, so request timeouts are enforced one layer up — every
+   * call made through this server is bounded by
+   * {@link ClientConfig.timeoutMs} via {@link import('./utils/timeout').withTimeout}
+   * (see `readContractState` / `simulateContractCall` / `invokeContract`).
    *
    * @returns Cached rpc.Server instance for this client's network
    *

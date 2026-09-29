@@ -20,6 +20,13 @@ export interface RetryPolicy {
   baseDelayMs?: number;
   /** Upper bound applied to any single backoff delay. Defaults to 5000. */
   maxDelayMs?: number;
+  /**
+   * Per-attempt timeout in milliseconds for the stage's RPC calls,
+   * overriding the client-wide {@link ClientConfig.timeoutMs}. A timed-out
+   * attempt is retried like any other transient failure and surfaces as a
+   * `TIMEOUT` error once the budget is spent.
+   */
+  timeoutMs?: number;
 }
 
 /** Parameters required to assemble an unsigned transaction envelope. */
@@ -81,7 +88,11 @@ export interface EstimateFeeOptions extends PrepareOptions {
 export interface FeeBumpOptions {
   /** Keypair of the account that will pay the bumped fee and sign the fee-bump envelope. */
   feeSource: Keypair;
-  /** Fee in stroops for the fee-bump envelope. Defaults to 10x `BASE_FEE`. */
+  /**
+   * Fee in stroops for the fee-bump envelope. Defaults to the inner
+   * transaction's fee, which always satisfies Stellar's requirement that the
+   * fee-bump base fee cover the inner transaction's fee rate.
+   */
   baseFee?: string;
 }
 
@@ -91,6 +102,15 @@ export interface SubmitOptions extends RetryPolicy {
   pollIntervalMs?: number;
   /** Maximum number of confirmation polls before timing out. Defaults to 10. */
   pollAttempts?: number;
+  /**
+   * Overall deadline in milliseconds for one confirmation-polling cycle,
+   * bounding the total time spent waiting for the transaction to land
+   * regardless of `pollAttempts` / `pollIntervalMs`. When it elapses the
+   * poll fails with a `TIMEOUT` error (retried by the surrounding submit
+   * stage, matching the existing poll-exhaustion behaviour). Defaults to
+   * `pollAttempts` x `pollIntervalMs`.
+   */
+  pollTimeoutMs?: number;
   /**
    * When the initial submission fails for a fee-related reason (the node
    * reports `TRY_AGAIN_LATER` or rejects the transaction for insufficient

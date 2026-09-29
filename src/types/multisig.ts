@@ -25,6 +25,10 @@ export interface SignatureEntry {
    */
   signedXdr: string;
   addedAt: number;
+  /** Whether this signature has been cryptographically verified */
+  verified?: boolean;
+  /** UNIX timestamp (ms) when the signature was verified */
+  verifiedAt?: number;
 }
 
 /** Internal state of one pending multi-sig operation */

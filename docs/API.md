@@ -172,8 +172,8 @@ gigA.amountXLM; // '10' — unaffected by gigB
 Throws `TrustFlowError` (`VALIDATION_ERROR`) when a required field is missing.
 
 ## EscrowMonitor
-- `.on(event, handler)` — subscribe to escrow events
-- `.off(event, handler)` — unsubscribe
+- `.on(event, handler)` — subscribe to escrow events; `handler` is narrowed to that event's payload
+- `.off(event, handler)` — unsubscribe (same overloads as `.on`)
 - `.onError(callback)` — observe fetch/handler failures (`{ phase: 'fetch' | 'handler' }`)
 - `.onReconnect(callback)` — notified when resilient polling recovers (`{ cursor, failures }`)
 - `.onGapDetected(callback)` — notified of possible missed events (`{ reason, fromLedger, toLedger, cursor }`)
@@ -182,6 +182,52 @@ Throws `TrustFlowError` (`VALIDATION_ERROR`) when a required field is missing.
 - `.startResilientRawPolling(intervalMs, contractId, fetchRaw, options?)` — same, parsing raw `getEvents` output via `parseEvents`
 - `.deliver(events)` — dispatch already-parsed events to handlers
 - `.stopPolling()` — stop any active polling loop
+
+### Subscribing with a narrowed handler
+
+`on`/`off` take a `TrustFlowEventType` literal and contextually type `event` to
+that event, so `event.data` is the payload type — no second `if` narrowing:
+
+```typescript
+import { EscrowMonitor, type EventHandlerFor, type MonitorEventName } from '@trustflow/sdk';
+
+const monitor = new EscrowMonitor();
+
+// `e` is narrowed to the `escrow_created` event, so `data.amount` is a bigint.
+monitor.on('escrow_created', (e) => {
+  console.log(e.data.escrowId, e.data.amount);
+});
+
+// Another event's payload is a compile error, not a runtime `undefined`:
+monitor.on('dispute_raised', (e) => {
+  // Property 'amount' does not exist on type 'DisputeRaisedData'
+  console.log(e.data.amount);
+});
+
+// A name the parser never emits is rejected too — a typo used to compile and
+// silently never fire:
+monitor.on('escrow_create', () => {}); // error TS2769
+
+// '*' receives the whole union, so narrow it yourself or switch on `e.type`:
+monitor.on('*', (e) => console.log('any event', e.type));
+
+// The same literal removes the handler, with no cast (#228 may add an
+// unsubscribe return value; the overloads here carry over to it):
+const onCreated: EventHandlerFor<'escrow_created'> = (e) => void e.data.escrowId;
+monitor.on('escrow_created', onCreated);
+monitor.off('escrow_created', onCreated);
+
+// A name held in a variable: type it as MonitorEventName to stay inside the
+// checked surface (a plain `string` still works, but is deprecated).
+const name: MonitorEventName = 'escrow_created';
+monitor.on(name, (e) => void e.data);
+```
+
+The types involved — `MonitorEventName`, `EventHandlerFor<T>` and the
+narrowed event itself (`ParsedEventForType<T>`) — are exported from the package
+root. Untyped events (`escrow_cancelled`, `dispute_resolved`,
+`milestone_completed`) carry `data: Record<string, unknown>`, so treat their
+payload as unverified.
 
 ### Resilient polling (recommended for production)
 
@@ -480,6 +526,34 @@ A `Retry-After` header on a `429` overrides the backoff schedule, still capped b
 Horizon/Soroban defaults come from `DEFAULT_NODE_RETRY_CONFIG` (2 retries, 300ms base, 5s cap) —
 deliberately shorter than the backend default, so a degraded network surfaces quickly instead of
 stalling a UI.
+
+### Timeouts
+
+Every network call the SDK makes is bounded by a deadline, so a stalled server surfaces as a
+`TIMEOUT` error instead of hanging the caller. The client-wide default is configured once:
+
+```typescript
+const client = new TrustFlowClient({
+  contractId,
+  timeoutMs: 15_000, // default 10s — Horizon + Soroban RPC calls
+});
+```
+
+| Option | Default | Applies to |
+|---|---|---|
+| `ClientConfig.timeoutMs` | `10_000` | `connect()`, `getBalance()`, `getAccountInfo()`, and every contract read/simulate/invoke call |
+| `ReadContractStateOptions.timeoutMs` / `InvokeContractOptions.timeoutMs` | client-wide | one contract call |
+| `RetryPolicy.timeoutMs` (pipeline) | client-wide | each attempt of one pipeline stage |
+| `SubmitOptions.pollTimeoutMs` | `pollAttempts` x `pollIntervalMs` | overall confirmation-polling deadline |
+| `ContractConfig.timeoutMs` | `10_000` | backend calls made by `TrustFlowEscrowClient` / `DisputeClient` / `MultiSigEscrowClient` |
+| `TrustFlowEscrowClientOptions.timeoutMs` / `DisputeClientOptions.timeoutMs` / `MultiSigEscrowClientOptions.timeoutMs` / `AuthRequestOptions.timeoutMs` / `IPFSConfig.timeoutMs` | `10_000` | one backend client or call |
+
+A timed-out attempt is retried like any other transient failure while the retry budget lasts;
+once the budget is spent the call fails with a `TIMEOUT` `TrustFlowError` (or a
+`Request timed out after <n>ms` message from the backend clients). The Stellar SDK's
+`rpc.Server` (v15.x) ignores its `timeout` constructor option, so RPC timeouts are enforced by
+racing each call against the deadline; the raw-`fetch` helpers (`fetchAccountInfo`,
+`submitTransaction`) abort the in-flight request at the deadline.
 
 ### Retry classification
 

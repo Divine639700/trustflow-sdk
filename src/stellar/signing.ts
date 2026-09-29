@@ -99,3 +99,43 @@ export async function signWithFreighter(
 
   return { xdr: signedXDR, hash: hash.toString('hex') };
 }
+
+/**
+ * Signs an arbitrary message with a raw Stellar Keypair (Node.js/CLI environments).
+ *
+ * This produces a raw ed25519 signature over the UTF-8 message bytes, base64-encoded,
+ * which matches the format expected by the TrustFlow backend's
+ * `Keypair.fromPublicKey(address).verify(Buffer.from(challenge, 'utf-8'), Buffer.from(signature, 'base64'))`.
+ *
+ * @param keypair - The Stellar Keypair to sign with
+ * @param message - The message to sign as a UTF-8 string
+ * @returns Base64-encoded ed25519 signature
+ */
+export function signMessageWithKeypair(keypair: Keypair, message: string): string {
+  const messageBytes = Buffer.from(message, 'utf-8');
+  const signature = keypair.sign(messageBytes);
+  return signature.toString('base64');
+}
+
+/**
+ * Signs an arbitrary message using the Freighter wallet.
+ *
+ * This produces a raw ed25519 signature over the UTF-8 message bytes, base64-encoded,
+ * which matches the format expected by the TrustFlow backend.
+ *
+ * @param message - The message to sign as a UTF-8 string
+ * @returns Base64-encoded ed25519 signature
+ * @throws {TrustFlowError} `UNAUTHORIZED` when no wallet is available, `SIGNING_ERROR` for signing failures
+ */
+export async function signMessageWithFreighter(message: string): Promise<string> {
+  const freighter = getFreighter();
+  if (!freighter) {
+    throw new TrustFlowError('Freighter wallet not available', 'UNAUTHORIZED');
+  }
+
+  try {
+    return await freighter.signMessage(message);
+  } catch (e) {
+    throw TrustFlowError.signingFailed(e instanceof Error ? e.message : String(e), e);
+  }
+}

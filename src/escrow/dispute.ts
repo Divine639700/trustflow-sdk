@@ -1,4 +1,5 @@
 import type { TrustFlowClient } from '../client';
+import type { ContractConfig } from '../types/contract';
 import type { DisputeEscrowParams } from '../types';
 import { DisputeParams, SDKResult } from '../types/index';
 import { TrustFlowError } from '../errors';
@@ -60,7 +61,7 @@ import type { ContractConfig } from '../types/contract';
 
 /** Constructor options for {@link DisputeClient}. */
 export interface DisputeClientOptions {
-  /** Per-request timeout (ms) applied to backend dispute calls. */
+  /** Per-request timeout (ms) applied to backend dispute calls. Falls back to `config.timeoutMs`. */
   timeoutMs?: number;
   /**
    * Retry budget for backend calls. Defaults to 3 retries with a 250ms base
@@ -98,24 +99,34 @@ export class DisputeClient {
   private readonly apiUrl: string;
   private readonly token: string;
 
-  /**
-   * @param config - Contract configuration; `apiBaseUrl` and `apiKey` are both required
-   * @param options - Optional {@link DisputeClientOptions}
-   * @throws {Error} If `apiBaseUrl` or `apiKey` is missing
-   */
-  constructor(config: ContractConfig, options: DisputeClientOptions = {}) {
-    if (!config.apiBaseUrl) {
+  constructor(config: ContractConfig, options?: DisputeClientOptions);
+  /** @deprecated Pass a ContractConfig object instead. */
+  constructor(apiUrl: string, token: string, options?: DisputeClientOptions);
+  constructor(
+    configOrUrl: ContractConfig | string,
+    tokenOrOptions: string | DisputeClientOptions = {},
+    legacyOptions: DisputeClientOptions = {},
+  ) {
+    const config = typeof configOrUrl === 'string' ? undefined : configOrUrl;
+    this.apiUrl = config ? config.apiBaseUrl ?? '' : String(configOrUrl);
+    this.token = config
+      ? config.apiKey ?? ''
+      : typeof tokenOrOptions === 'string'
+        ? tokenOrOptions
+        : '';
+    const options =
+      typeof tokenOrOptions === 'string' ? legacyOptions : tokenOrOptions;
+
+    if (!this.apiUrl) {
       throw new Error('apiBaseUrl is required for DisputeClient');
     }
-    if (!config.apiKey) {
+    if (!this.token) {
       throw new Error('apiKey is required for DisputeClient');
     }
-    this.apiUrl = config.apiBaseUrl;
-    this.token = config.apiKey;
 
     this.http = createApiHttpClient({
       baseURL: this.apiUrl,
-      timeoutMs: options.timeoutMs,
+      timeoutMs: options.timeoutMs ?? config.timeoutMs,
       retry: options.retry,
       interceptors: options.interceptors ?? config.interceptors,
       additionalHeaders: {

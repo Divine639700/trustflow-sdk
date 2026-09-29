@@ -1,4 +1,10 @@
-import type { ParsedTrustFlowEvent, EventHandler } from '../types/events';
+import type {
+  ParsedTrustFlowEvent,
+  EventHandler,
+  EventHandlerFor,
+  MonitorEventName,
+  TrustFlowEventType,
+} from '../types/events';
 import type { CursorStore, RawContractEvent } from '../events';
 import { InMemoryCursorStore, parseEvents } from '../events';
 import { logger } from '../utils/logger';
@@ -70,9 +76,7 @@ export interface ResilientPollingOptions {
  * Cursor-aware fetch function for resilient polling. Receives the last saved
  * cursor (or `undefined` on first poll) and returns parsed events.
  */
-export type CursorAwareFetchFn = (
-  cursor?: string
-) => Promise<ParsedTrustFlowEvent[]>;
+export type CursorAwareFetchFn = (cursor?: string) => Promise<ParsedTrustFlowEvent[]>;
 
 /**
  * Subscribes handlers to parsed TrustFlow events and dispatches them.
@@ -109,7 +113,43 @@ export class EscrowMonitor {
   private lastCursor?: string;
   private consecutiveFailures = 0;
 
-  on(type: string, handler: EventHandler): this {
+  /**
+   * Register a handler for `type`, narrowed to that event's payload (#287).
+   *
+   * The handler's `event` parameter is contextually typed from the literal, so
+   * `monitor.on('escrow_created', (e) => e.data.amount)` compiles — no second
+   * `if (e.type === ...)` narrowing needed. Passing a name the parser never
+   * emits is a compile error instead of a handler that silently never fires.
+   *
+   * Overloads, in resolution order:
+   *
+   * 1. a `TrustFlowEventType` literal (or union of them) — narrowed handler;
+   * 2. `'*'` — wildcard handler receiving the full union;
+   * 3. a `MonitorEventName` or `string` variable — un-narrowed, since the name
+   *    is not statically known.
+   *
+   * @example
+   * ```ts
+   * monitor.on('escrow_created', (e) => console.log(e.data.escrowId, e.data.amount));
+   * monitor.on('*', (e) => console.log('any event', e.type));
+   * ```
+   */
+  on<T extends TrustFlowEventType>(type: T, handler: EventHandlerFor<T>): this;
+  on(type: '*', handler: EventHandler): this;
+  /**
+   * Non-literal names — a {@link MonitorEventName} variable, or the
+   * deprecated `string` escape hatch below. `string extends T` is true only
+   * when `T` is the full `string` type, so a *literal* argument resolves to
+   * `never` here and is rejected: this overload cannot be used to slip a typo
+   * past the narrowed signatures.
+   *
+   * @deprecated The event name should be a {@link TrustFlowEventType} literal
+   * or a {@link MonitorEventName} value. Kept for callers that hold the name in
+   * a `string` variable; narrow to `MonitorEventName`, or cast at the boundary,
+   * instead of widening to `string`.
+   */
+  on<T extends string>(type: string extends T ? T : MonitorEventName, handler: EventHandler): this;
+  on(type: MonitorEventName | string, handler: EventHandler): this {
     if (!this.handlers.has(type)) {
       this.handlers.set(type, new Set());
     }
@@ -117,7 +157,16 @@ export class EscrowMonitor {
     return this;
   }
 
-  off(type: string, handler: EventHandler): this {
+  /**
+   * Remove a handler registered with {@link EscrowMonitor.on}. Mirrors its
+   * overloads, so a handler is removed with the same literal it was added
+   * with — no cast for a narrowed registration (#287).
+   */
+  off<T extends TrustFlowEventType>(type: T, handler: EventHandlerFor<T>): this;
+  off(type: '*', handler: EventHandler): this;
+  /** @deprecated See the matching note on {@link EscrowMonitor.on}. */
+  off<T extends string>(type: string extends T ? T : MonitorEventName, handler: EventHandler): this;
+  off(type: MonitorEventName | string, handler: EventHandler): this {
     this.handlers.get(type)?.delete(handler);
     return this;
   }
@@ -265,10 +314,7 @@ export class EscrowMonitor {
         if (isCursorExpiredError(error)) {
           this.gapCallback?.({ reason: 'cursor-expired', cursor, fromLedger: this.lastLedger });
         }
-        const backoff = Math.min(
-          baseBackoffMs * 2 ** (this.consecutiveFailures - 1),
-          maxBackoffMs,
-        );
+        const backoff = Math.min(baseBackoffMs * 2 ** (this.consecutiveFailures - 1), maxBackoffMs);
         schedule(intervalMs + backoff);
         return;
       }
@@ -352,6 +398,7 @@ export class EscrowMonitor {
 
 /** Heuristic: RPC errors mentioning cursor/retention/expiry mean the saved position is gone. */
 function isCursorExpiredError(error: unknown): boolean {
-  const message = error instanceof Error ? `${error.message} ${(error as Error).cause ?? ''}` : String(error);
+  const message =
+    error instanceof Error ? `${error.message} ${(error as Error).cause ?? ''}` : String(error);
   return /cursor|retention|expired|prun|behind|gap/i.test(message);
 }

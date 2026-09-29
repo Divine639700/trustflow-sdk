@@ -25,7 +25,7 @@ export interface GetGigsOptions {
 
 /** Constructor options for {@link TrustFlowEscrowClient}. */
 export interface TrustFlowEscrowClientOptions {
-  /** Per-request timeout in milliseconds for backend calls. */
+  /** Per-request timeout in milliseconds for backend calls. Falls back to `config.timeoutMs`. */
   timeoutMs?: number;
   /**
    * Default retry budget for backend calls, used when a per-call
@@ -62,7 +62,9 @@ export class TrustFlowEscrowClient {
 
   constructor(config: ContractConfig, options: TrustFlowEscrowClientOptions = {}) {
     this.contractConfig = config;
-    this.timeoutMs = options.timeoutMs;
+    // Per-call options win, then the client-wide config value, so a single
+    // `timeoutMs` on the shared config covers every backend call.
+    this.timeoutMs = options.timeoutMs ?? config.timeoutMs;
     this.retry = options.retry;
     this.interceptors = options.interceptors;
   }

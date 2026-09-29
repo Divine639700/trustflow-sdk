@@ -46,12 +46,22 @@ export interface ClientConfig {
   ipfs?: IPFSConfig;
   /** Retry budget for network and RPC calls. */
   retry?: ApiRetryConfig;
+  /**
+   * Default per-request timeout in milliseconds for Horizon and Soroban RPC
+   * calls. Every per-call option (`ReadContractStateOptions.timeoutMs`,
+   * `InvokeContractOptions.timeoutMs`, `TransactionPipeline`'s
+   * `RetryPolicy.timeoutMs` / `SubmitOptions.pollTimeoutMs`) overrides it.
+   * Defaults to 10s.
+   */
+  timeoutMs?: number;
   /** Initial accounts to configure on the client. */
   accounts?: AddAccountInput[];
   /** Dependency injection seam for testing: custom Soroban RPC server instance. */
   rpcServer?: rpc.Server;
   /** Dependency injection seam for testing: custom Horizon server instance. */
   horizonServer?: Horizon.Server;
+  /** Logging configuration for the SDK client. */
+  logging?: LoggingConfig;
 }
 
 /** Status of an escrow contract. */

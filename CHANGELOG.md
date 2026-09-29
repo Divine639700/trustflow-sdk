@@ -191,6 +191,85 @@ also fixes #245: an on-chain `FAILED` result no longer re-sends the same signed 
 in on the same origin no longer overwrite each other's token. Omitting the scope keeps the legacy
 unscoped key, so sessions written by earlier SDK versions still load.
 
+### Multi-sig operation input validation
+
+- Issue #285: `initMultiSigOperation` accepted input it could not honour, and the failures
+  surfaced much later — as an operation that never became ready, or as an assembly error after
+  every signer had already signed. It now refuses, with a message naming the offending field:
+  - a non-integer `threshold` (`threshold must be an integer`) — `NaN` satisfies both
+    `threshold < 1` and `threshold > signers.length`, and a fraction silently rounded the
+    M-of-N requirement;
+  - a `signers` entry that is not a valid Stellar address (`signers[2] is not a valid Stellar
+    address: …`), checked with `isValidStellarAddress` like every other entry point;
+  - a blank or over-long `escrowId` (max 128 characters), which is interpolated into
+    `operationId`;
+  - an `operationType` outside `release | cancel | dispute` — the union is erased at runtime, so
+    an untyped caller (or `JSON.parse`) previously stored anything, including `undefined`;
+  - an `unsignedXdr` that is not a parseable transaction envelope for the network
+    (`unsignedXdr is not a valid Stellar transaction envelope`), now checked up front through the
+    same helper `addSignature` uses, instead of at assembly time;
+  - a non-finite or already-past `expiresAt` (`expiresAt must be a finite UNIX timestamp in
+    milliseconds` / `expiresAt is in the past`).
+- Duplicate signers, the M-of-N bounds, the required-field checks and the network-passphrase
+  check are unchanged, and so are the error strings for all of them. `unsignedXdr` is parsed
+  before a signature can be added, so a valid `signedXdr` still assembles.
+
+### EscrowMonitor handler typing
+
+- Issue #287: `EscrowMonitor.on` / `off` are now overloaded, so a handler is contextually typed by
+  the event name it registers for:
+
+  ```typescript
+  monitor.on('escrow_created', (e) => console.log(e.data.escrowId, e.data.amount));
+  monitor.on('*', (e) => console.log('any event', e.type));
+  ```
+
+  `e.data` is the payload for that event — `EscrowCreatedData`, `EscrowReleasedData` or
+  `DisputeRaisedData` — with no second `if (e.type === ...)` narrowing, and `off` takes the same
+  literal so a narrowed handler is removed without a cast. `monitor.on('escrow_cancelled', e =>
+  …)` still receives `Record<string, unknown>`, which is what the untyped events carry.
+- New exported types: `MonitorEventName` (`TrustFlowEventType | '*'`, including the wildcard that
+  was previously discoverable only by reading `deliver`), `EventHandlerFor<T>` and
+  `ParsedEventForType<T>`.
+- **Behaviour change to be aware of:** a *literal* event name the parser never emits is now a
+  compile error (`monitor.on('escrow_create', …)`, `monitor.on('escrow.created', …)`). It used to
+  compile and register a handler that silently never fired. A name held in a `string` variable
+  still works — that fallback overload is kept and marked deprecated — so
+  `monitor.on(nameFromConfig, …)` compiles until you type the variable as `MonitorEventName`.
+- No runtime change: `on`, `off` and `deliver` behave exactly as before, wildcard dispatch
+  included.
+
+### Multi-sig tests against the real client
+
+- Issue #288: `tests/multisig.test.ts` stubbed both the client and `stellar-sdk`, so it asserted
+  against hand-written fixtures — including a placeholder XDR and a mock address that the
+  validation above no longer accepts. It is rebuilt on deterministic keypairs, real transaction,
+  fee-bump and signed envelopes, a mocked Horizon and the real `MultiSigEscrowClient`, with one
+  case per validation rule, coverage of the lazy-expiry and envelope-type paths, and
+  `src/escrow/multisig.ts` at 100% line coverage. Two `it.failing` cases document the known
+  #280 (a signature is accepted from a claimed signer without verifying it against the envelope)
+  and #283 (submitting an already-submitted operation re-broadcasts it) gaps and start passing
+  when those are fixed.
+
+### Contract event ground truth (spike, no behaviour change)
+
+- Issue #286: the SDK's event vocabulary was compared against what the contract actually
+  publishes. The contract emits **thirteen** events, each as a `namespace`/`verb` symbol pair in
+  `topic[1]`/`topic[2]` with the payload as a `#[contracttype]` struct in `value`. `src/events.ts`
+  declares six underscore-separated names, of which **none** exists on chain: it reads the event
+  name from `topic[0]`, which in an RPC response is the contract id, so `parseEvent` returns
+  `type` set to a base64 blob with an empty payload for every real event. The three typed payload
+  shapes match nothing, and the "canonical convention" comment in `src/events.ts` is wrong.
+  The findings, the full topic/payload table, and the recommendation are in
+  `docs/spikes/issue-286-event-ground-truth.md`.
+- Recommendation: type all thirteen real events and derive the vocabulary from the contract spec
+  (`scSpecEntryEventV0` is currently dropped by `SorobanSpec.indexEntries()`) rather than
+  hardcoding it again. The decoder rewrite is #282.
+- No runtime behaviour changes here. `tests/fixtures/contract-events.json` holds the captures
+  (generated by running the contract's own `Env` against the `soroban-sdk` version its
+  `Cargo.lock` pins), and `tests/contract-events-fixture.test.ts` re-decodes them so the documented
+  vocabulary fails the build if the contract's events change.
+
 ## [Unreleased] — previous
 - The `@trustflow/sdk/react` entry is now emitted as a client module: `dist/hooks/index.js` and
   `dist/hooks/index.mjs` start with a `'use client'` directive. The entry exports hooks that call

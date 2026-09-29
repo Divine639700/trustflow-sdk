@@ -1,4 +1,4 @@
-import { xdr } from '@stellar/stellar-sdk';
+import { xdr, Contract, Account, TransactionBuilder, BASE_FEE } from '@stellar/stellar-sdk';
 import type { TrustFlowClient } from '../client';
 import type { ContractCallResult } from '../types/contract';
 import type { SimulationResult } from './simulate';
@@ -117,6 +117,11 @@ export class SorobanContractClient extends AbstractContractClient {
   /**
    * Simulates execution of a contract method for dry-run validation and fee estimation.
    *
+   * Builds a real transaction envelope (using a dummy source account, matching
+   * `readContractState`) and simulates it against Soroban RPC. This ensures the
+   * simulation reflects the actual call — including footprint, auth entries,
+   * and resource cost — rather than a disconnected set of encoded arguments.
+   *
    * @param methodName - Function name defined in contract spec
    * @param args - Arguments array or object map
    */
@@ -124,9 +129,22 @@ export class SorobanContractClient extends AbstractContractClient {
     methodName: string,
     args: Record<string, unknown> | unknown[] = [],
   ): Promise<SimulationResult> {
-    const payload = this.parseXDRPayload(methodName, args);
-    const combinedXdr = payload.xdrBase64.join('');
-    return simulateContractCall(this.client, combinedXdr);
+    const scVals = this.encodeArgs(methodName, args);
+    const contract = new Contract(this.contractId);
+    const operation = contract.call(methodName, ...(scVals as any[]));
+
+    // Use a dummy account for simulation, matching readContractState
+    const dummyAccount = new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF', '0');
+
+    const tx = new TransactionBuilder(dummyAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: this.client.getNetworkPassphrase(),
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+
+    return simulateContractCall(this.client, tx.toXDR('base64'));
   }
 }
 

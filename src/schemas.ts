@@ -157,9 +157,7 @@ export function parseRpcResponse<T extends z.ZodTypeAny>(
     throw new TrustFlowError(
       `RPC response for "${context}" failed schema validation`,
       'VALIDATION_ERROR',
-      result.error.flatten(),
-      context,
-      result.error.issues,
+      { context, issues: result.error.issues },
     );
   }
   return result.data;

@@ -61,15 +61,6 @@ describe('EscrowMonitor', () => {
   });
 
   describe('onError', () => {
-    const event = {
-      type: 'escrow.created' as const,
-      escrowId: '1',
-      payload: {},
-      blockNumber: 1,
-      txHash: 'abc',
-      timestamp: Date.now(),
-    };
-
     it('invokes onError when fetchFn rejects', async () => {
       const monitor = new EscrowMonitor();
       const onError = jest.fn();
@@ -92,8 +83,12 @@ describe('EscrowMonitor', () => {
       const onError = jest.fn();
       monitor.onError(onError);
       const boom = jest.fn().mockRejectedValue(new Error('handler boom'));
-      monitor.on('escrow.created', boom);
-      const fetchFn = jest.fn().mockResolvedValue([event]);
+      // 'escrow_created' rather than the dot-notation name removed in #108:
+      // `on` now rejects a name the parser cannot emit (#287), which is the
+      // point — a handler registered under a name that never matches would
+      // never run, so this test would assert nothing.
+      monitor.on('escrow_created', boom);
+      const fetchFn = jest.fn().mockResolvedValue([createdEvent('1')]);
       monitor.startPolling(1000, fetchFn);
 
       await jest.advanceTimersByTimeAsync(1000);

@@ -191,6 +191,49 @@ describe('TransactionPipeline.buildFeeBump', () => {
     expect(result.error).toBeInstanceOf(TrustFlowError);
     expect(result.error.code).toBe('FEE_BUMP_ERROR');
   });
+
+  it('defaults the base fee to the inner transaction fee when none is given', () => {
+    const sourceKeypair = Keypair.random();
+    // A one-operation inner transaction with a 50,100-stroop fee: the old
+    // fixed default of 1,000 stroops was rejected here with "Invalid baseFee,
+    // it should be at least 50100 stroops".
+    const inner = buildUnsignedTx(sourceKeypair.publicKey(), '50100');
+    inner.sign(sourceKeypair);
+
+    const pipeline = new TransactionPipeline(makeClient());
+    const result = pipeline.buildFeeBump(inner, { feeSource: Keypair.random() });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The fee-bump base fee is the inner fee, so the envelope pays
+    // innerFee × (operations + 1).
+    expect(result.data.fee).toBe(String(Number(inner.fee) * 2));
+  });
+
+  it('defaults the base fee to the inner fee for a prepared Soroban transaction', () => {
+    const sourceKeypair = Keypair.random();
+    // What prepare() produces for a 50,000-stroop resource fee: inclusion
+    // fee plus resource fee, with the resource fee in the Soroban data.
+    const resourceFee = '50000';
+    const inner = new TransactionBuilder(new Account(sourceKeypair.publicKey(), '100'), {
+      fee: BASE_FEE,
+      networkPassphrase: Networks.TESTNET,
+    })
+      .addOperation(new Contract(CONTRACT_ID).call('increment'))
+      .setTimeout(30)
+      .setSorobanData(new SorobanDataBuilder().setResourceFee(resourceFee).build())
+      .build();
+    inner.sign(sourceKeypair);
+
+    const pipeline = new TransactionPipeline(makeClient());
+    const result = pipeline.buildFeeBump(inner, { feeSource: Keypair.random() });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The fee-bump envelope pays the base fee per operation (including the
+    // fee-bump operation itself) plus the inner resource fee.
+    expect(result.data.fee).toBe(String(Number(inner.fee) * 2 + Number(resourceFee)));
+  });
 });
 
 describe('TransactionPipeline.submit', () => {
@@ -355,6 +398,55 @@ describe('TransactionPipeline.run', () => {
         maxAttempts: 1,
         pollIntervalMs: 1,
         feeBump: { feeSource: sponsor, baseFee: '5000' },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.feeBumped).toBe(true);
+    expect(result.data.hash).toBe('second');
+    expect(sendSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('escalates with the default base fee when feeBump omits baseFee', async () => {
+    const source = Keypair.random();
+    const sponsor = Keypair.random();
+
+    jest
+      .spyOn(rpc.Server.prototype, 'getAccount')
+      .mockResolvedValue(new Account(source.publicKey(), '100'));
+    // A realistic Soroban resource fee: the prepared inner fee is the
+    // inclusion fee plus this, far above the old fixed 1,000-stroop default.
+    jest.spyOn(rpc.Server.prototype, 'simulateTransaction').mockResolvedValue(simSuccess('50000'));
+
+    const sendSpy = jest
+      .spyOn(rpc.Server.prototype, 'sendTransaction')
+      .mockResolvedValueOnce({
+        status: 'TRY_AGAIN_LATER',
+        hash: 'first',
+        latestLedger: 1,
+        latestLedgerCloseTime: 1,
+      })
+      .mockResolvedValueOnce({
+        status: 'PENDING',
+        hash: 'second',
+        latestLedger: 2,
+        latestLedgerCloseTime: 2,
+      });
+    jest.spyOn(rpc.Server.prototype, 'getTransaction').mockResolvedValue({
+      status: rpc.Api.GetTransactionStatus.SUCCESS,
+      ledger: 9,
+    } as unknown as rpc.Api.GetTransactionResponse);
+
+    const pipeline = new TransactionPipeline(makeClient());
+    const result = await pipeline.run({
+      sourceAccount: source.publicKey(),
+      operations: [new Contract(CONTRACT_ID).call('increment')],
+      signers: [source],
+      submit: {
+        maxAttempts: 1,
+        pollIntervalMs: 1,
+        feeBump: { feeSource: sponsor },
       },
     });
 
@@ -743,7 +835,7 @@ describe('TransactionPipeline.run failure paths', () => {
     expect(sendSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('returns FEE_BUMP_ERROR when the fee-bump envelope cannot be built', async () => {
+  it('returns the original submission error when the fee-bump envelope cannot be built', async () => {
     const source = Keypair.random();
     mockAssembleAndPrepare(source);
     const sendSpy = jest
@@ -756,7 +848,9 @@ describe('TransactionPipeline.run failure paths', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.code).toBe('FEE_BUMP_ERROR');
+    // A fee-bump construction failure must not hide why the first submission
+    // failed: the caller needs the original reason to act on it.
+    expect(result.error.code).toBe('RETRY_EXHAUSTED');
     expect(sendSpy).toHaveBeenCalledTimes(1);
   });
 

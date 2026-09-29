@@ -5,6 +5,7 @@ import type { AxiosInstance } from 'axios';
 import { createApiHttpClient, toApiErrorMessage } from '../utils/http';
 import type { ApiRetryConfig } from '../utils/http';
 import type { HttpInterceptors } from '../utils/interceptors';
+import { logger } from '../utils/logger';
 
 /** Default upload endpoint — a raw-body IPFS upload API (e.g. web3.storage-compatible). */
 const DEFAULT_IPFS_API_URL = 'https://api.web3.storage/upload';
@@ -18,7 +19,7 @@ export interface IPFSConfig {
   apiKey?: string;
   /** Read gateway used to build the returned `url` from a CID. */
   gatewayUrl?: string;
-  /** Request timeout in milliseconds. Defaults to 30s. */
+  /** Request timeout in milliseconds. Defaults to 10s. */
   timeoutMs?: number;
   /**
    * Retry budget for upload requests. Defaults to 3 retries with a 250ms base

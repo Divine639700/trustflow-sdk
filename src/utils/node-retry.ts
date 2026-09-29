@@ -1,6 +1,7 @@
 import { retry as runRetry, backoffHonouringRetryAfter } from './retry';
 import { isTransientError } from './transient';
 import type { ApiRetryConfig } from './http';
+import { withTimeout } from './timeout';
 import { logger } from './logger';
 
 /**
@@ -72,7 +73,10 @@ export function resolveNodeRetryPolicy(
  * `docs/spikes/issue-79-retry-session-multisig.md` §2 is applied uniformly.
  *
  * @param fn - Operation to run; receives the 1-indexed attempt number
- * @param options - Per-call overrides, merged over `retryConfig`
+ * @param options - Per-call overrides, merged over `retryConfig`. `timeoutMs`
+ *   bounds **each attempt** (not the whole retry loop) and rejects with a
+ *   `TIMEOUT` {@link TrustFlowError} when it elapses; a timed-out attempt is
+ *   retried like any other transient failure.
  * @param retryConfig - `ApiRetryConfig` from `ClientConfig` / the sub-client options
  * @param label - Stage name used in retry log lines
  * @returns Whatever `fn` resolves to
@@ -90,7 +94,7 @@ export function resolveNodeRetryPolicy(
  */
 export async function withTransientRetry<T>(
   fn: (attempt: number) => Promise<T>,
-  options?: Partial<ResolvedNodeRetryPolicy>,
+  options?: Partial<ResolvedNodeRetryPolicy> & { timeoutMs?: number },
   retryConfig?: ApiRetryConfig,
   label?: string,
 ): Promise<T> {
@@ -100,18 +104,22 @@ export async function withTransientRetry<T>(
     baseDelayMs: options?.baseDelayMs ?? resolved.baseDelayMs,
     maxDelayMs: options?.maxDelayMs ?? resolved.maxDelayMs,
   };
+  const timeoutMs = options?.timeoutMs;
 
-  return runRetry(fn, {
-    attempts: policy.attempts,
-    delayMs: backoffHonouringRetryAfter(policy.baseDelayMs, policy.maxDelayMs),
-    shouldRetry: isTransientError,
-    jitter: true,
-    onRetry: (attempt: number, error: unknown, info: { willRetry: boolean }) => {
-      if (!info.willRetry) return;
-      const reason = error instanceof Error ? error.message : String(error);
-      logger.debug(
-        `retrying ${label ?? 'request'} after transient failure (attempt ${attempt}): ${reason}`,
-      );
+  return runRetry(
+    async (attempt: number) => withTimeout(fn(attempt), timeoutMs, label),
+    {
+      attempts: policy.attempts,
+      delayMs: backoffHonouringRetryAfter(policy.baseDelayMs, policy.maxDelayMs),
+      shouldRetry: isTransientError,
+      jitter: true,
+      onRetry: (attempt: number, error: unknown, info: { willRetry: boolean }) => {
+        if (!info.willRetry) return;
+        const reason = error instanceof Error ? error.message : String(error);
+        logger.debug(
+          `retrying ${label ?? 'request'} after transient failure (attempt ${attempt}): ${reason}`,
+        );
+      },
     },
-  });
+  );
 }

@@ -2,6 +2,7 @@ import { TrustFlowError } from '../errors';
 import { withTransientRetry } from '../utils/node-retry';
 import { markTransient } from '../utils/transient';
 import type { ApiRetryConfig } from '../utils/http';
+import { fetchWithTimeout } from '../utils/timeout';
 
 export interface PreparedTx {
   xdr: string;
@@ -76,17 +77,25 @@ function normaliseHorizonUrl(horizonUrl: string): string {
  * the first attempt. The envelope is byte-identical on every replay, so a
  * retry cannot double-spend even if the first attempt did land.
  *
+ * `timeoutMs` bounds the raw `fetch` to Horizon; the request is aborted at the
+ * deadline and the failure surfaces as a `TIMEOUT` `TrustFlowError` (retried
+ * like any other transient failure while the budget lasts). It defaults to the
+ * SDK-wide 10s when omitted.
+ *
  * @param xdr - Base64 signed transaction envelope
  * @param horizonUrl - Horizon base URL (with or without a trailing slash)
  * @param retry - Optional retry budget; defaults to
  *   {@link import('../utils/node-retry').DEFAULT_NODE_RETRY_CONFIG}
- * @throws {TrustFlowError} `SUBMISSION_ERROR` for a Horizon rejection, or
- *   `CONNECTION_ERROR` when the request never completed
+ * @param timeoutMs - Optional request timeout in milliseconds
+ * @throws {TrustFlowError} `SUBMISSION_ERROR` for a Horizon rejection,
+ *   `CONNECTION_ERROR` when the request never completed, or `TIMEOUT` when the
+ *   deadline fires
  */
 export async function submitTransaction(
   xdr: string,
   horizonUrl: string,
   retry?: ApiRetryConfig,
+  timeoutMs?: number,
 ): Promise<SubmittedTx> {
   const baseUrl = normaliseHorizonUrl(horizonUrl);
 
@@ -96,12 +105,19 @@ export async function submitTransaction(
       async () => {
         let response: Response;
         try {
-          response = await fetch(`${baseUrl}/transactions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `tx=${encodeURIComponent(xdr)}`,
-          });
+          response = await fetchWithTimeout(
+            `${baseUrl}/transactions`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: `tx=${encodeURIComponent(xdr)}`,
+            },
+            timeoutMs,
+            'horizon.submitTransaction',
+          );
         } catch (e) {
+          // A `TIMEOUT` TrustFlowError passes through `wrap` unchanged, so the
+          // deadline stays distinguishable from an ordinary transport failure.
           throw markTransient(TrustFlowError.wrap(e, 'CONNECTION_ERROR'));
         }
         // A 429/408/5xx means the request never reached a Horizon verdict —
