@@ -25,6 +25,7 @@ import type {
   SubmittableTransaction,
 } from './types';
 import { logger } from '../utils/logger';
+import { simulateTransaction } from '../contract/simulation';
 
 const DEFAULT_RETRY_POLICY: Required<Omit<RetryPolicy, 'timeoutMs'>> = {
   maxAttempts: 3,
@@ -300,27 +301,41 @@ export class TransactionPipeline {
     tx: Transaction,
     options?: RetryPolicy,
   ): Promise<PipelineResult<rpc.Api.SimulateTransactionResponse>> {
-    const response = await withRetry(
-      () => this.server.simulateTransaction(tx),
+    const outcome = await withRetry(
+      () => simulateTransaction(this.server, tx, options, this.client.retryConfig),
       options,
       'simulate',
       this.client.timeoutMs,
     );
-    if (!response.ok) {
-      if (response.error.code === 'RETRY_EXHAUSTED') {
+    if (!outcome.ok) {
+      if (outcome.error.code === 'RETRY_EXHAUSTED') {
         return fail(
           TrustFlowError.simulationFailed(
             'simulateTransaction request failed',
-            response.error.cause,
+            outcome.error.cause,
           ),
         );
       }
-      return response;
+      return fail(outcome.error);
     }
-    if (rpc.Api.isSimulationError(response.data)) {
-      return fail(TrustFlowError.simulationFailed(response.data.error));
+    if (!outcome.data.success) {
+      if (outcome.data.needsRestore) {
+        return fail(
+          TrustFlowError.simulationFailed(
+            'simulation requires restore preamble',
+            outcome.data.restorePreamble,
+          ),
+        );
+      }
+      return fail(TrustFlowError.simulationFailed(outcome.data.error ?? 'unknown simulation error'));
     }
-    return ok(response.data);
+    // Reconstruct a minimal success response for callers that need the raw RPC shape
+    return ok({
+      transactionData: outcome.data.transactionData ?? '',
+      events: [],
+      minResourceFee: outcome.data.minResourceFee ?? '0',
+      result: { retval: outcome.data.returnValue as any },
+    } as unknown as rpc.Api.SimulateTransactionResponse);
   }
 
   /**
@@ -338,19 +353,30 @@ export class TransactionPipeline {
     this.pipelineLogger.debug('Preparing transaction', { resourceFeeMultiplier: multiplier });
     return withRetry(
       async () => {
-        const simulation = await this.server.simulateTransaction(tx);
-        if (rpc.Api.isSimulationError(simulation)) {
-          throw TrustFlowError.simulationFailed(simulation.error);
+        const simulation = await simulateTransaction(this.server, tx, options, this.client.retryConfig);
+        if (!simulation.success) {
+          if (simulation.needsRestore) {
+            throw TrustFlowError.simulationFailed(
+              'simulation requires restore preamble',
+              simulation.restorePreamble,
+            );
+          }
+          throw TrustFlowError.simulationFailed(simulation.error ?? 'unknown simulation error');
         }
 
         // `assembleTransaction` reads the resource fee off `transactionData`
         // itself (not `minResourceFee`), so the headroom must be written
         // onto the SorobanTransactionData builder for it to take effect.
-        const paddedFee = Math.ceil(Number(simulation.minResourceFee) * multiplier).toString();
-        simulation.transactionData.setResourceFee(paddedFee);
+        const minFee = Number(simulation.minResourceFee ?? '0');
+        const paddedFee = Math.ceil(minFee * multiplier).toString();
         this.pipelineLogger.debug('Transaction prepared', { paddedFee, minResourceFee: simulation.minResourceFee });
 
-        return rpc.assembleTransaction(tx, { ...simulation, minResourceFee: paddedFee }).build();
+        return rpc.assembleTransaction(tx, {
+          transactionData: simulation.transactionData ?? '',
+          events: [],
+          minResourceFee: paddedFee,
+          result: { retval: simulation.returnValue as any },
+        } as any).build();
       },
       options,
       'prepare',

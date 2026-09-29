@@ -1,76 +1,156 @@
+import { Address, nativeToScVal, xdr } from '@stellar/stellar-sdk';
 import { parseEvent, parseEvents } from '../src/events';
-import type { RawContractEvent, ParsedTrustFlowEvent } from '../src/events';
+import type { RawContractEvent } from '../src/events';
 import { EscrowMonitor } from '../src/escrow/monitor';
 
-/** Build the base64 an `SCV_STRING` ScVal decodes to `s` (prefix byte 0x0e, 4 skipped bytes). */
-function scStr(s: string): string {
-  return Buffer.concat([
-    Buffer.from([0x0e, 0, 0, 0, s.length]),
-    Buffer.from(s, 'utf8'),
-  ]).toString('base64');
-}
-
 const CONTRACT_ID = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4';
+const SENDER = 'GA2C5RFPE6GCKMY3US5PAB6UZLKIGAHWKXX2GIOVPWW27DD6W4KZYLMI';
+const RECIPIENT = 'GD5J7HIIPWQLERKINKN4AQGEOFTLPGNGICAHMA6VFLXIPGIPDHAAPG5A';
 
-function rawCreated(): RawContractEvent {
+function createXdrEvent(
+  type: string,
+  topics: xdr.ScVal[],
+  value: xdr.ScVal,
+): RawContractEvent {
+  const topicBase64 = [
+    xdr.ScVal.scvSymbol(type).toXDR('base64'),
+    ...topics.map((t) => t.toXDR('base64')),
+  ];
   return {
     type: 'contract',
     ledger: 42,
     ledgerClosedAt: '2024-01-01T00:00:00Z',
     contractId: CONTRACT_ID,
     id: 'ev-1',
-    pagingToken: 'pt',
-    value: '5000000',
-    topic: [scStr('escrow_created'), scStr('esc-1'), scStr('GSENDER'), scStr('GRECIPIENT')],
+    pagingToken: 'pt-1',
+    value: value.toXDR('base64'),
+    topic: topicBase64,
   };
 }
 
-describe('event consolidation (#108, #112)', () => {
-  it('parseEvent returns a discriminated union that narrows data on type (#112)', () => {
-    const event = parseEvent(rawCreated());
+describe('Event Parsing with real Soroban XDR (#138, #282, #284)', () => {
+  it('decodes real Soroban XDR for escrow_created accurately', () => {
+    const raw = createXdrEvent(
+      'escrow_created',
+      [
+        xdr.ScVal.scvString('esc-100'),
+        Address.fromString(SENDER).toScVal(),
+        Address.fromString(RECIPIENT).toScVal(),
+      ],
+      nativeToScVal(50_000_000n, { type: 'i128' }),
+    );
+
+    const event = parseEvent(raw);
     expect(event).not.toBeNull();
-    expect(event!.type).toBe('escrow_created');
+    expect(event?.type).toBe('escrow_created');
 
     if (event && event.type === 'escrow_created') {
-      // `data` is EscrowCreatedData here — no cast, and these members exist.
-      expect(event.data.escrowId).toBe('esc-1');
-      expect(event.data.sender).toBe('GSENDER');
-      expect(event.data.recipient).toBe('GRECIPIENT');
-      expect(event.data.amount).toBe(5_000_000n);
-    } else {
-      throw new Error('expected an escrow_created event');
+      expect(event.data.escrowId).toBe('esc-100');
+      expect(event.data.sender).toBe(SENDER);
+      expect(event.data.recipient).toBe(RECIPIENT);
+      expect(event.data.amount).toBe(50_000_000n);
     }
   });
 
-  it('an unknown/unhandled event type falls back to an empty record payload', () => {
-    const raw = rawCreated();
-    raw.topic = [scStr('milestone_completed'), scStr('esc-9')];
+  it('decodes escrow_released events with real address and i128 values', () => {
+    const raw = createXdrEvent(
+      'escrow_released',
+      [
+        xdr.ScVal.scvString('esc-100'),
+        Address.fromString(RECIPIENT).toScVal(),
+      ],
+      nativeToScVal(25_000_000n, { type: 'i128' }),
+    );
+
     const event = parseEvent(raw);
-    expect(event?.type).toBe('milestone_completed');
-    expect(event?.data).toEqual({});
+    expect(event).not.toBeNull();
+    expect(event?.type).toBe('escrow_released');
+
+    if (event && event.type === 'escrow_released') {
+      expect(event.data.escrowId).toBe('esc-100');
+      expect(event.data.recipient).toBe(RECIPIENT);
+      expect(event.data.amount).toBe(25_000_000n);
+    }
   });
 
-  it('parseEvents output flows straight into an EscrowMonitor handler (#108)', async () => {
-    const monitor = new EscrowMonitor();
-    const seen: ParsedTrustFlowEvent[] = [];
-    monitor.on('escrow_created', (e) => {
-      seen.push(e);
+  it('rejects unknown event types by returning null', () => {
+    const raw = createXdrEvent(
+      'unknown_event_type',
+      [xdr.ScVal.scvString('data')],
+      xdr.ScVal.scvVoid(),
+    );
+    expect(parseEvent(raw)).toBeNull();
+  });
+
+  it('rejects events with incomplete topics by returning null', () => {
+    const raw = {
+      type: 'contract',
+      ledger: 42,
+      ledgerClosedAt: '2024-01-01T00:00:00Z',
+      contractId: CONTRACT_ID,
+      id: 'ev-bad',
+      pagingToken: 'pt',
+      value: '1000',
+      topic: [xdr.ScVal.scvSymbol('escrow_created').toXDR('base64')], // Missing sender & recipient
+    };
+    expect(parseEvent(raw)).toBeNull();
+  });
+
+  it('parseEvents filters out malformed events without throwing or dropping valid events', () => {
+    const validRaw = createXdrEvent(
+      'escrow_created',
+      [
+        xdr.ScVal.scvString('esc-good'),
+        Address.fromString(SENDER).toScVal(),
+        Address.fromString(RECIPIENT).toScVal(),
+      ],
+      nativeToScVal(1_000_000n, { type: 'i128' }),
+    );
+
+    const malformedRaw = {
+      type: 'contract',
+      ledger: 42,
+      ledgerClosedAt: '2024-01-01T00:00:00Z',
+      contractId: CONTRACT_ID,
+      id: 'ev-malformed',
+      pagingToken: 'pt-2',
+      value: 'not-a-number',
+      topic: [xdr.ScVal.scvSymbol('escrow_created').toXDR('base64'), 'invalid-topic'],
+    };
+
+    const skipped: any[] = [];
+    const events = parseEvents([validRaw, malformedRaw], CONTRACT_ID, {
+      onSkip: (ev) => skipped.push(ev),
     });
 
-    // No adapter between the two — parseEvents returns exactly what deliver() takes.
-    monitor.deliver(parseEvents([rawCreated()], CONTRACT_ID));
-    await Promise.resolve();
-
-    expect(seen).toHaveLength(1);
-    expect(seen[0].type).toBe('escrow_created');
-    if (seen[0].type === 'escrow_created') {
-      expect(seen[0].data.amount).toBe(5_000_000n);
-    }
+    expect(events.length).toBe(1);
+    expect(events[0].type).toBe('escrow_created');
+    expect(skipped.length).toBe(1);
+    expect(skipped[0].id).toBe('ev-malformed');
   });
 
-  it('parseEvents filters events from other contracts', () => {
-    const mine = rawCreated();
-    const theirs = { ...rawCreated(), contractId: 'COTHER', id: 'ev-2' };
-    expect(parseEvents([mine, theirs], CONTRACT_ID)).toHaveLength(1);
+  it('integrates seamlessly with EscrowMonitor handlers', async () => {
+    const monitor = new EscrowMonitor();
+    const seen: string[] = [];
+
+    monitor.on('escrow_created', (e) => {
+      seen.push(e.data.escrowId);
+    });
+
+    const validRaw = createXdrEvent(
+      'escrow_created',
+      [
+        xdr.ScVal.scvString('esc-flow'),
+        Address.fromString(SENDER).toScVal(),
+        Address.fromString(RECIPIENT).toScVal(),
+      ],
+      nativeToScVal(1_000_000n, { type: 'i128' }),
+    );
+
+    const parsed = parseEvents([validRaw], CONTRACT_ID);
+    monitor.deliver(parsed);
+
+    await Promise.resolve();
+    expect(seen).toEqual(['esc-flow']);
   });
 });

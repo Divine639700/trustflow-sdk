@@ -1,12 +1,14 @@
 import { TransactionBuilder, Keypair, xdr } from '@stellar/stellar-sdk';
 import { TrustFlowError } from '../errors';
 import { logger } from '../utils/logger';
+import { isValidEscrowId, isValidStellarAddress } from '../utils/validation';
 import type { ContractConfig } from '../types/contract';
 import type {
   InitMultiSigParams,
   AddSignatureParams,
   MultiSigOperation,
   MultiSigOperationStatus,
+  MultiSigOperationType,
   MultiSigStatus,
   SignatureEntry,
   InitMultiSigResult,
@@ -25,6 +27,18 @@ import { submitTransaction } from '../stellar/transaction';
  * `expired`) is retained before it becomes eligible for automatic eviction.
  */
 export const DEFAULT_MULTISIG_RETENTION_MS = 5 * 60 * 1000;
+
+/**
+ * Runtime counterpart of `MultiSigOperationType`. The union is erased at
+ * runtime, so an untyped caller (or a value from `JSON.parse`) can reach
+ * `initMultiSigOperation` with anything at all — including `undefined` — and
+ * have it stored on the operation.
+ */
+const VALID_MULTISIG_OPERATION_TYPES: readonly MultiSigOperationType[] = [
+  'release',
+  'cancel',
+  'dispute',
+];
 
 /**
  * Constructor options for {@link MultiSigEscrowClient}.
@@ -413,11 +427,19 @@ export class MultiSigEscrowClient {
   }
 
   private _validateInitParams(params: InitMultiSigParams): InitMultiSigResult | { ok: true } {
-    if (!params.escrowId) {
+    if (typeof params.escrowId !== 'string' || params.escrowId.trim().length === 0) {
       return { ok: false, error: 'escrowId is required' };
+    }
+    if (!isValidEscrowId(params.escrowId)) {
+      return { ok: false, error: 'escrowId must be at most 128 characters' };
     }
     if (!params.signers || params.signers.length === 0) {
       return { ok: false, error: 'At least one signer is required' };
+    }
+    // `NaN` slips through both comparisons below, and a fractional threshold
+    // would silently round the M-of-N requirement, so require an integer here.
+    if (!Number.isInteger(params.threshold)) {
+      return { ok: false, error: 'threshold must be an integer' };
     }
     if (params.threshold < 1) {
       return { ok: false, error: 'threshold must be at least 1' };
@@ -426,6 +448,24 @@ export class MultiSigEscrowClient {
       return {
         ok: false,
         error: `threshold (${params.threshold}) cannot exceed the number of signers (${params.signers.length})`,
+      };
+    }
+    const uniqueSigners = new Set(params.signers);
+    if (uniqueSigners.size !== params.signers.length) {
+      return { ok: false, error: 'Duplicate signer addresses are not allowed' };
+    }
+    for (const [index, signer] of params.signers.entries()) {
+      if (!isValidStellarAddress(signer)) {
+        return {
+          ok: false,
+          error: `signers[${index}] is not a valid Stellar address: ${signer}`,
+        };
+      }
+    }
+    if (!VALID_MULTISIG_OPERATION_TYPES.includes(params.operationType)) {
+      return {
+        ok: false,
+        error: `operationType must be one of: ${VALID_MULTISIG_OPERATION_TYPES.join(', ')}`,
       };
     }
     if (!params.unsignedXdr) {
@@ -440,10 +480,18 @@ export class MultiSigEscrowClient {
         error: `networkPassphrase mismatch: expected "${this.config.networkPassphrase}"`,
       };
     }
-
-    const uniqueSigners = new Set(params.signers);
-    if (uniqueSigners.size !== params.signers.length) {
-      return { ok: false, error: 'Duplicate signer addresses are not allowed' };
+    // Parsing here rather than at `addSignature` time means a caller learns
+    // that the base envelope is unusable before any signer is asked to sign.
+    if (!this._isValidEnvelope(params.unsignedXdr, params.networkPassphrase)) {
+      return { ok: false, error: 'unsignedXdr is not a valid Stellar transaction envelope' };
+    }
+    if (params.expiresAt !== undefined) {
+      if (!Number.isFinite(params.expiresAt)) {
+        return { ok: false, error: 'expiresAt must be a finite UNIX timestamp in milliseconds' };
+      }
+      if (params.expiresAt <= Date.now()) {
+        return { ok: false, error: 'expiresAt is in the past' };
+      }
     }
 
     return { ok: true };
@@ -470,15 +518,30 @@ export class MultiSigEscrowClient {
     baseXdr: string,
     signerAddress: string,
     networkPassphrase: string,
-  ): { ok: true; hash: Buffer; signature: xdr.DecoratedSignature } | { ok: false; error: string } {
-    // Parse both envelopes to get their hashes
-    let baseHash: Buffer;
-    let signedHash: Buffer;
+  ): { ok: true } | { ok: false; error: string } {
+    return this._isValidEnvelope(signedXdr, networkPassphrase)
+      ? { ok: true }
+      : { ok: false, error: 'signedXdr is not a valid Stellar transaction envelope' };
+  }
 
+  /**
+   * True when `envelopeXdr` parses as a transaction envelope for
+   * `networkPassphrase`. `Transaction` covers the v1/fee-bump envelopes the
+   * current SDK builds; the raw XDR parse is the fallback for anything
+   * `Transaction` rejects (e.g. legacy v0 envelopes).
+   */
+  private _isValidEnvelope(envelopeXdr: string, networkPassphrase: string): boolean {
     try {
-      baseHash = this._getTransactionHash(baseXdr, networkPassphrase);
-    } catch (e) {
-      return { ok: false, error: `base unsignedXdr is invalid: ${String(e)}` };
+      new Transaction(envelopeXdr, networkPassphrase);
+      return true;
+    } catch {
+      try {
+        // FeeBump transactions are also valid envelopes
+        xdr.TransactionEnvelope.fromXDR(envelopeXdr, 'base64');
+        return true;
+      } catch {
+        return false;
+      }
     }
 
     try {

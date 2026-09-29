@@ -8,9 +8,9 @@ import {
   SDK_VERSION,
   DEFAULT_API_VERSION,
 } from './constants';
-import { logger, type SDKLogger } from './utils/logger';
+import { logger, SDKLogger } from './utils/logger';
 import { TrustFlowError } from './errors';
-import type { Network, ClientConfig } from './types';
+import type { Network, ClientConfig, LoggingConfig } from './types';
 import { IPFSStorage } from './storage';
 import { SimpleCache } from './utils/cache';
 import { AccountManager } from './accounts/manager';

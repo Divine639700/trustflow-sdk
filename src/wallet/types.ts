@@ -11,6 +11,13 @@ export interface WalletAdapter {
   isAvailable(): Promise<boolean>;
   connect(): Promise<WalletConnection>;
   sign(xdr: string, network: string): Promise<string>;
+  /**
+   * Signs an arbitrary message (not a transaction) with the wallet's keypair.
+   *
+   * @param message - The message to sign as a UTF-8 string
+   * @returns Base64-encoded ed25519 signature of the UTF-8 message bytes
+   */
+  signMessage(message: string): Promise<string>;
   disconnect(): Promise<void>;
 }
 

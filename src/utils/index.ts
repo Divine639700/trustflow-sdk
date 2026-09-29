@@ -16,4 +16,6 @@ export { TrustFlowError } from '../errors';
 
 export * from './version';
 export * from './dedup';
+
+export * from './crypto';
 export * from './timeout';

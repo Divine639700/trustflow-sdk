@@ -1,16 +1,9 @@
-import {
-  rpc,
-  Contract,
-  Account,
-  TransactionBuilder,
-  BASE_FEE,
-  scValToNative,
-} from '@stellar/stellar-sdk';
+import { Contract, Account, TransactionBuilder, BASE_FEE } from '@stellar/stellar-sdk';
 import type { TrustFlowClient } from '../client';
 import type { AccountOptions } from '../accounts/types';
 import { TrustFlowError } from '../errors';
-import { withTransientRetry } from '../utils/node-retry';
 import { logger } from '../utils/logger';
+import { simulateTransaction } from './simulation';
 
 export interface ReadContractStateOptions extends AccountOptions {
   /**
@@ -43,6 +36,13 @@ export interface ReadContractStateOptions extends AccountOptions {
  * Each attempt is bounded by `options.timeoutMs`, falling back to the
  * client-wide {@link ClientConfig.timeoutMs}; a timed-out attempt is retried,
  * and once the budget is spent the call throws `TIMEOUT`.
+ *
+ * ### Restore footprint
+ *
+ * When the simulation indicates that expired ledger entries must be restored
+ * (`rpc.Api.isSimulationRestore`), the call throws `SIMULATION_ERROR` with a
+ * message describing the restore requirement, since a read cannot proceed
+ * without the restored state.
  *
  * @param client - Configured client, for the contract ID, network and retry budget
  * @param method - Contract method name
@@ -79,27 +79,21 @@ export async function readContractState(
     .setTimeout(30)
     .build();
 
-  try {
-    const result = await withTransientRetry(
-      () => server.simulateTransaction(tx),
-      options.retry,
-      client.retryConfig,
-      'rpc.simulateTransaction',
-    );
+  const result = await simulateTransaction(server, tx, options, client.retryConfig);
 
-    if (rpc.Api.isSimulationError(result as any)) {
+  if (!result.success) {
+    if (result.needsRestore) {
       throw new TrustFlowError(
-        `Read simulation failed: ${(result as any).error ?? 'unknown error'}`,
+        `Read simulation failed: contract state has expired and must be restored first`,
         'SIMULATION_ERROR',
       );
     }
-
-    const retval = (result as any).result?.retval;
-    logger.debug('Contract read succeeded', { method });
-    return retval ? scValToNative(retval) : undefined;
-  } catch (e) {
-    if (e instanceof TrustFlowError) throw e;
-    logger.error('Contract read failed', { method, error: e });
-    throw new TrustFlowError('Read simulation failed', 'SIMULATION_ERROR', e);
+    throw new TrustFlowError(
+      `Read simulation failed: ${result.error ?? 'unknown error'}`,
+      'SIMULATION_ERROR',
+    );
   }
+
+  logger.debug('Contract read succeeded', { method });
+  return result.returnValue;
 }

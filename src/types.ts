@@ -60,6 +60,8 @@ export interface ClientConfig {
   rpcServer?: rpc.Server;
   /** Dependency injection seam for testing: custom Horizon server instance. */
   horizonServer?: Horizon.Server;
+  /** Logging configuration for the SDK client. */
+  logging?: LoggingConfig;
 }
 
 /** Status of an escrow contract. */

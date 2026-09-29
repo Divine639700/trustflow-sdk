@@ -29,4 +29,6 @@ export interface ContractCallResult {
   txHash?: string;
   errorCode?: number;
   gasUsed?: number;
+  /** Error message when `success` is false, describing why the call failed. */
+  error?: string;
 }

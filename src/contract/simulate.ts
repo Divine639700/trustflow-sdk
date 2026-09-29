@@ -1,23 +1,26 @@
-import { rpc, scValToNative } from '@stellar/stellar-sdk';
+import type { rpc } from '@stellar/stellar-sdk';
 import type { TrustFlowClient } from '../client';
 import { TrustFlowError } from '../errors';
-import { withTransientRetry } from '../utils/node-retry';
 import { logger } from '../utils/logger';
 import type { ReadContractStateOptions } from './read';
+import { simulateTransaction, type SimulationOutcome } from './simulation';
 
 export interface SimulationResult {
   success: boolean;
   cost: { cpuInsns: string; memBytes: string };
   returnValue?: unknown;
   error?: string;
+  /** True when the simulation needs expired ledger entries restored before it can succeed. */
+  needsRestore?: boolean;
+  /** The restore preamble the RPC returned, when `needsRestore` is true. */
+  restorePreamble?: {
+    minResourceFee: string;
+    transactionData: string;
+  };
 }
 
 /** Per-call account and retry overrides for {@link simulateContractCall}. */
 export type SimulateContractCallOptions = ReadContractStateOptions;
-
-interface FakeEnvelope {
-  toXDR(): string;
-}
 
 /**
  * Simulates an already-assembled transaction envelope without submitting it.
@@ -33,6 +36,13 @@ interface FakeEnvelope {
  * Each attempt is bounded by `options.timeoutMs`, falling back to the
  * client-wide {@link ClientConfig.timeoutMs}; once every attempt has timed out
  * and the retry budget is spent, the call throws `TIMEOUT`.
+ *
+ * ### Restore footprint
+ *
+ * When the simulation response indicates that expired ledger entries must be
+ * restored before the transaction can succeed (`rpc.Api.isSimulationRestore`),
+ * the result includes `needsRestore: true` and the `restorePreamble` so the
+ * caller can build a restore transaction before re-submitting.
  *
  * @param client - Configured client, for the RPC URL and retry budget
  * @param xdr - Base64 transaction envelope to simulate
@@ -56,30 +66,19 @@ export async function simulateContractCall(
   client.resolveAccount(options.account);
   const server = client.getSorobanServer();
   try {
-    const result = await withTransientRetry(
-      () =>
-        server.simulateTransaction({
-          toEnvelope: () => ({ toXDR: () => xdr }) as FakeEnvelope,
-        } as any),
-      { ...options.retry, timeoutMs: options.timeoutMs ?? client.timeoutMs },
+    const outcome: SimulationOutcome = await simulateTransaction(
+      server,
+      { toEnvelope: () => ({ toXDR: () => xdr }) } as any,
+      options,
       client.retryConfig,
-      'rpc.simulateTransaction',
     );
-    if (rpc.Api.isSimulationError(result)) {
-      logger.warn('Contract simulation returned error', { error: result.error });
-      return { success: false, cost: { cpuInsns: '0', memBytes: '0' }, error: result.error };
-    }
-    // Decode the simulated return value the same way readContractState does,
-    // so callers get a native JS value rather than a raw ScVal.
-    const retval = (result as rpc.Api.SimulateTransactionSuccessResponse).result?.retval;
-    logger.debug('Contract simulation succeeded');
     return {
-      success: true,
-      cost: {
-        cpuInsns: '0',
-        memBytes: '0',
-      },
-      returnValue: retval ? scValToNative(retval) : undefined,
+      success: outcome.success,
+      cost: outcome.cost,
+      returnValue: outcome.returnValue,
+      error: outcome.error,
+      needsRestore: outcome.needsRestore,
+      restorePreamble: outcome.restorePreamble,
     };
   } catch (e) {
     // A `TIMEOUT` (or any typed SDK error) keeps its code rather than being

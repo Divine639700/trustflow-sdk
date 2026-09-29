@@ -2,14 +2,12 @@ import { rpc, Contract, TransactionBuilder, BASE_FEE } from '@stellar/stellar-sd
 import type { TrustFlowClient } from '../client';
 import type { ContractCallResult } from '../types/contract';
 import type { AccountOptions } from '../accounts/types';
-import { TrustFlowError } from '../errors';
 import { withTransientRetry } from '../utils/node-retry';
 import { logger } from '../utils/logger';
 import type { ReadContractStateOptions } from './read';
+import { simulateTransaction } from './simulation';
 
 export type SignAndSubmitFn = (xdr: string) => Promise<string>;
-
-const invokeLogger = logger;
 
 /** Per-call account and retry overrides for {@link invokeContract}. */
 export interface InvokeContractOptions extends AccountOptions {
@@ -39,11 +37,17 @@ export interface InvokeContractOptions extends AccountOptions {
  * `getAccount` failure for a genuinely missing account is likewise retried once
  * by the classifier's default (an unrecognised error from a transport is
  * treated as a transport failure), then reported as
- * `{ success: false }`, matching this function's existing contract of never
- * throwing.
+ * `{ success: false, error }`, matching this function's existing contract of
+ * never throwing.
  *
  * Each RPC attempt is bounded by `options.timeoutMs`, falling back to the
  * client-wide {@link ClientConfig.timeoutMs}.
+ *
+ * ### Error reporting
+ *
+ * When the simulation fails or an exception is caught, the result includes the
+ * RPC's error message in the `error` field so callers can diagnose the failure
+ * without parsing logs.
  *
  * @param client - Configured client, for the contract ID, network and retry budget
  * @param method - Contract method name
@@ -85,32 +89,37 @@ export async function invokeContract(
       .setTimeout(30)
       .build();
 
-    const simulation = await withTransientRetry(
-      () => server.simulateTransaction(tx),
+    const simulation = await simulateTransaction(
+      server,
+      tx,
       { ...options.retry, timeoutMs: options.timeoutMs ?? client.timeoutMs },
       client.retryConfig,
-      'rpc.simulateTransaction',
     );
 
-    if (rpc.Api.isSimulationError(simulation)) {
+    if (!simulation.success) {
       logger.warn('Contract simulation failed', { method, error: simulation.error });
       return {
         success: false,
-        errorCode: undefined,
+        error: simulation.error,
       };
     }
 
-    logger.debug('Contract simulation successful', { method, gasUsed: simulation.minResourceFee });
+    logger.debug('Contract simulation successful', { method, gasUsed: simulation.cost });
 
     if (!signAndSubmit) {
       return {
         success: true,
-        returnValue: simulation.result?.retval,
+        returnValue: simulation.returnValue,
         gasUsed: 0,
       };
     }
 
-    const prepared = rpc.assembleTransaction(tx, simulation).build();
+    const prepared = rpc.assembleTransaction(tx, {
+      transactionData: simulation.transactionData ?? '',
+      events: [],
+      minResourceFee: simulation.minResourceFee ?? '0',
+      result: { retval: simulation.returnValue as any },
+    } as any).build();
     const xdr = prepared.toXDR();
     logger.debug('Signing and submitting transaction', { method, xdrLength: xdr.length });
     const txHash = await signAndSubmit(xdr);
@@ -119,14 +128,12 @@ export async function invokeContract(
     return {
       success: true,
       txHash,
-      returnValue: simulation.result?.retval,
+      returnValue: simulation.returnValue,
       gasUsed: 0,
     };
   } catch (e) {
     logger.error('Contract invocation failed', { method, caller, error: e });
-    if (e instanceof TrustFlowError) {
-      return { success: false, errorCode: undefined };
-    }
-    return { success: false, errorCode: undefined };
+    const message = e instanceof Error ? e.message : String(e);
+    return { success: false, error: message };
   }
 }

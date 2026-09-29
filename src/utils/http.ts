@@ -4,6 +4,7 @@ import { attachInterceptors } from './interceptors';
 import type { HttpInterceptors } from './interceptors';
 import { logger } from './logger';
 import { SDK_VERSION, DEFAULT_API_VERSION } from '../constants';
+import { DEFAULT_TIMEOUT_MS, isAxiosTimeoutError, axiosTimeoutMs } from './timeout';
 
 declare module 'axios' {
   export interface AxiosRequestConfig {
