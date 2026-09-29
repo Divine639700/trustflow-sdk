@@ -1,4 +1,5 @@
 import { TrustFlowError } from '../errors';
+import { toBaseUnits } from './format';
 
 export const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
 export const CONTRACT_ID_RE = /^C[A-Z2-7]{55}$/;
@@ -54,11 +55,8 @@ export function assertStellarAddress(value: string, field = 'address'): void {
   }
 }
 
-export function xlmToStroops(xlm: string): bigint {
-  const parts = xlm.split('.');
-  const whole = BigInt(parts[0]) * 10_000_000n;
-  const frac = parts[1] ? BigInt(parts[1].padEnd(7, '0').slice(0, 7)) : 0n;
-  return whole + frac;
+export function xlmToStroops(xlm: string | number): bigint {
+  return toBaseUnits(typeof xlm === 'string' ? xlm : String(xlm), 7);
 }
 
 export function isValidEscrowId(value: string): boolean {

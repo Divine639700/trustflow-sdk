@@ -15,7 +15,10 @@ import { withTimeout } from '../utils/timeout';
 import { queueDepth, queueKey, runExclusive } from './queue';
 import type {
   AssembleParams,
+  EstimateFeeOptions,
   FeeBumpOptions,
+  FeeEstimate,
+  FeeRange,
   PipelineResult,
   PipelineSubmission,
   PrepareOptions,
@@ -336,6 +339,68 @@ export class TransactionPipeline {
       minResourceFee: outcome.data.minResourceFee ?? '0',
       result: { retval: outcome.data.returnValue as any },
     } as unknown as rpc.Api.SimulateTransactionResponse);
+  }
+
+  /**
+   * Estimates resource fee, inclusion fee, and execution costs for a transaction.
+   *
+   * @param tx - The transaction to estimate fees for
+   * @param options - Fee estimation and retry options
+   * @returns Breakdown of resource and inclusion fees with cost footprint
+   */
+  async estimateFee(
+    tx: Transaction,
+    options?: EstimateFeeOptions,
+  ): Promise<PipelineResult<FeeEstimate>> {
+    const simulation = await this.simulate(tx, options);
+    if (!simulation.ok) {
+      return simulation;
+    }
+
+    const simData = simulation.data;
+    if (rpc.Api.isSimulationError(simData)) {
+      return fail(TrustFlowError.simulationFailed(simData.error));
+    }
+
+    const multiplier = options?.resourceFeeMultiplier ?? DEFAULT_RESOURCE_FEE_MULTIPLIER;
+    const multiplierBps = BigInt(Math.round(multiplier * 10000));
+    const minResourceFeeBig = BigInt(simData.minResourceFee || '0');
+    const resourceFee = ((minResourceFeeBig * multiplierBps + 9999n) / 10000n).toString();
+
+    let minInclusionFee = BigInt(tx.fee || BASE_FEE);
+    if (minInclusionFee <= 0n) {
+      minInclusionFee = BigInt(BASE_FEE);
+    }
+    const recommendedInclusionFee = minInclusionFee * 2n;
+    const maxInclusionFee = minInclusionFee * 10n;
+
+    const tolerance = options?.toleranceMultiplier ?? 1.0;
+    const tolBps = BigInt(Math.round(tolerance * 10000));
+
+    const inclusionFee: FeeRange = {
+      min: ((minInclusionFee * tolBps + 9999n) / 10000n).toString(),
+      recommended: ((recommendedInclusionFee * tolBps + 9999n) / 10000n).toString(),
+      max: ((maxInclusionFee * tolBps + 9999n) / 10000n).toString(),
+    };
+
+    const resFeeBig = BigInt(resourceFee);
+    const total: FeeRange = {
+      min: (resFeeBig + BigInt(inclusionFee.min)).toString(),
+      recommended: (resFeeBig + BigInt(inclusionFee.recommended)).toString(),
+      max: (resFeeBig + BigInt(inclusionFee.max)).toString(),
+    };
+
+    const cost = {
+      cpuInsns: String((simData as any).cost?.cpuInsns ?? '0'),
+      memBytes: String((simData as any).cost?.memBytes ?? (simData as any).cost?.memByte ?? '0'),
+    };
+
+    return ok({
+      resourceFee,
+      inclusionFee,
+      total,
+      cost,
+    });
   }
 
   /**
