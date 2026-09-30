@@ -1,6 +1,7 @@
 export type TrustFlowErrorCode =
   | 'CONNECTION_ERROR'
   | 'CONTRACT_ERROR'
+  | 'INVALID_CONTRACT_CALL'
   | 'VALIDATION_ERROR'
   | 'UNAUTHORIZED'
   | 'NOT_FOUND'
@@ -21,17 +22,34 @@ export type TrustFlowErrorCode =
   | 'RETRY_EXHAUSTED'
   | 'NETWORK_ERROR'
   | 'AUTH_ERROR'
-  | 'TIMEOUT';
+  | 'TIMEOUT'
+  | 'INVALID_CONTRACT_CALL'
+  | 'CIRCUIT_BREAKER_OPEN'
+  | 'ACCOUNT_NOT_FOUND'
+  | 'UNSUPPORTED_ENVIRONMENT'
+  | 'VERSION_MISMATCH'
+  | 'USER_REJECTED'
+  | 'STALE_CHALLENGE';
 
 export class TrustFlowError extends Error {
   readonly code: TrustFlowErrorCode;
   readonly cause?: unknown;
+  readonly field?: string;
+  readonly issues?: any[];
 
-  constructor(message: string, code: TrustFlowErrorCode, cause?: unknown) {
+  constructor(
+    message: string,
+    code: TrustFlowErrorCode,
+    cause?: unknown,
+    field?: string,
+    issues?: any[],
+  ) {
     super(message);
     this.name = 'TrustFlowError';
     this.code = code;
     this.cause = cause;
+    this.field = field;
+    this.issues = issues;
   }
 
   static wrap(error: unknown, code: TrustFlowErrorCode = 'CONTRACT_ERROR'): TrustFlowError {
@@ -42,6 +60,22 @@ export class TrustFlowError extends Error {
     return new TrustFlowError(message, code, error);
   }
 
+  static versionMismatch(
+    clientVersion: string,
+    serverVersion: string,
+    details?: string,
+  ): TrustFlowError {
+    const reason = details ? ` (${details})` : '';
+    return new TrustFlowError(
+      `API version mismatch: client expected ${clientVersion}, server reported ${serverVersion}${reason}`,
+      'VERSION_MISMATCH',
+    );
+  }
+
+  static userRejected(detail = 'User rejected wallet connection', cause?: unknown): TrustFlowError {
+    return new TrustFlowError(detail, 'USER_REJECTED', cause);
+  }
+
   static notFound(resource: string): TrustFlowError {
     return new TrustFlowError(`${resource} not found`, 'NOT_FOUND');
   }
@@ -50,8 +84,14 @@ export class TrustFlowError extends Error {
     return new TrustFlowError(`Unauthorized to perform: ${action}`, 'UNAUTHORIZED');
   }
 
-  static validation(field: string, message: string): TrustFlowError {
-    return new TrustFlowError(`Validation failed for ${field}: ${message}`, 'VALIDATION_ERROR');
+  static validation(field: string, message: string, issues?: any[]): TrustFlowError {
+    return new TrustFlowError(
+      `Validation failed for ${field}: ${message}`,
+      'VALIDATION_ERROR',
+      undefined,
+      field,
+      issues,
+    );
   }
 
   static multiSigThresholdNotMet(collected: number, required: number): TrustFlowError {
@@ -96,11 +136,53 @@ export class TrustFlowError extends Error {
     );
   }
 
+  static signingFailed(detail: string, cause?: unknown): TrustFlowError {
+    return new TrustFlowError(`Signing failed: ${detail}`, 'SIGNING_ERROR', cause);
+  }
+
+  static queueTimeout(timeoutMs: number): TrustFlowError {
+    return new TrustFlowError(
+      `Timed out after ${timeoutMs}ms waiting for earlier transactions from the same source account`,
+      'TIMEOUT',
+    );
+  }
+
+  /**
+   * A request exceeded its timeout budget — an HTTP/RPC call that never
+   * answered, or a confirmation poll that never saw the transaction land.
+   *
+   * `context` names the operation that timed out (e.g. `'horizon.fetch'`),
+   * so a log line or error message says *what* stalled, not just that
+   * something did.
+   */
+  static timedOut(timeoutMs: number, context?: string): TrustFlowError {
+    const where = context ? ` (${context})` : '';
+    return new TrustFlowError(
+      `Timed out after ${timeoutMs}ms${where}`,
+      'TIMEOUT',
+    );
+  }
+
   static retryExhausted(stage: string, attempts: number, cause?: unknown): TrustFlowError {
     return new TrustFlowError(
       `Retries exhausted for ${stage} after ${attempts} attempt(s)`,
       'RETRY_EXHAUSTED',
       cause,
+    );
+  }
+
+  /**
+   * The requested account context is not registered, or no account is active
+   * and the call needed one. Only raised when a caller explicitly names an
+   * account — with no account configured, the SDK stays in its original
+   * single-account mode and never throws this.
+   */
+  static accountNotFound(ref?: string): TrustFlowError {
+    return new TrustFlowError(
+      ref
+        ? `No account context registered for "${ref}". Call client.accounts.add() first.`
+        : 'No account context is active. Call client.useAccount(id) or pass { account } explicitly.',
+      'ACCOUNT_NOT_FOUND',
     );
   }
 }

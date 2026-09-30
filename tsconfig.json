@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "CommonJS",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM"],
     "declaration": true,
     "outDir": "dist",
     "declarationMap": true,
@@ -16,7 +16,11 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "ignoreDeprecations": "6.0"
+    "ignoreDeprecations": "6.0",
+    // Explicit so the `@trustflow/sdk/node` entry's `node:http` / `node:https`
+    // imports type-check in both `tsc` and tsup's dts rollup, which resolves
+    // types independently of the default `types` auto-inclusion.
+    "types": ["node"]
   },
   "include": [
     "src/**/*"

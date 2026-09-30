@@ -148,5 +148,53 @@ describe('TrustFlowError (Unified Error Model)', () => {
       expect(err.message).toBe('Retries exhausted for submit after 3 attempt(s)');
       expect(err.cause).toBe(cause);
     });
+
+    it('creates signingFailed error', () => {
+      const cause = new Error('wallet error');
+      const err = TrustFlowError.signingFailed('failed to sign', cause);
+      expect(err).toBeInstanceOf(TrustFlowError);
+      expect(err.code).toBe('SIGNING_ERROR');
+      expect(err.message).toBe('Signing failed: failed to sign');
+      expect(err.cause).toBe(cause);
+    });
+
+    it('creates userRejected error', () => {
+      const err = TrustFlowError.userRejected('User rejected');
+      expect(err).toBeInstanceOf(TrustFlowError);
+      expect(err.code).toBe('USER_REJECTED');
+      expect(err.message).toBe('User rejected');
+    });
+
+    it('creates versionMismatch error', () => {
+      const err = TrustFlowError.versionMismatch('1.0.0', '2.0.0', 'breaking change');
+      expect(err).toBeInstanceOf(TrustFlowError);
+      expect(err.code).toBe('VERSION_MISMATCH');
+      expect(err.message).toContain('API version mismatch');
+    });
+
+    it('creates timedOut error', () => {
+      const err = TrustFlowError.timedOut(5000, 'rpc.simulate');
+      expect(err).toBeInstanceOf(TrustFlowError);
+      expect(err.code).toBe('TIMEOUT');
+      expect(err.message).toBe('Timed out after 5000ms (rpc.simulate)');
+    });
+
+    it('creates queueTimeout error', () => {
+      const err = TrustFlowError.queueTimeout(3000);
+      expect(err).toBeInstanceOf(TrustFlowError);
+      expect(err.code).toBe('TIMEOUT');
+      expect(err.message).toContain('Timed out after 3000ms');
+    });
+
+    it('creates accountNotFound error', () => {
+      const err1 = TrustFlowError.accountNotFound('alice');
+      expect(err1).toBeInstanceOf(TrustFlowError);
+      expect(err1.code).toBe('ACCOUNT_NOT_FOUND');
+      expect(err1.message).toContain('alice');
+
+      const err2 = TrustFlowError.accountNotFound();
+      expect(err2.code).toBe('ACCOUNT_NOT_FOUND');
+      expect(err2.message).toContain('No account context is active');
+    });
   });
 });

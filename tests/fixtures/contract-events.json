@@ -1,0 +1,253 @@
+{
+  "$meta": {
+    "source": "trustflow-protocol/trustflow-contract @ contracts/trustflow/src/lib.rs, compiled with soroban-sdk =20.0.0-rc2.2 (the version contracts/Cargo.lock pins)",
+    "capturedBy": "docs/spikes/issue-286-event-ground-truth.md — the generator runs the contract's own Env and serialises the published ScVals with ToXdr",
+    "shape": "soroban-rpc getEvents entries: topic[0] is the contract-id ScVal, topic[1..] are the published topics, value is the published data ScVal",
+    "syntheticFields": "ledger, ledgerClosedAt, id and pagingToken are deterministic placeholders — only topic[] and value are captured output",
+    "decoding": "every topic is an ScVal; the namespace/verb pair in topic[1]/topic[2] is what identifies the event, and value is a #[contracttype] struct encoded as ScVal::Map with symbol keys"
+  },
+  "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+  "events": [
+    {
+      "name": "pauser.set",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000000,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-0000000000000000",
+        "pagingToken": "1000000-0",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAZwYXVzZXIAAA==",
+          "AAAADwAAAANzZXQA"
+        ],
+        "value": "AAAAEQAAAAEAAAACAAAADwAAAAVhZG1pbgAAAAAAABIAAAAAAAAAAB8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+AAAADwAAAAZwYXVzZXIAAAAAABIAAAAAAAAAAD4/QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xd"
+      }
+    },
+    {
+      "name": "pauser.revoke",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000001,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-0000000000000001",
+        "pagingToken": "1000001-1",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAZwYXVzZXIAAA==",
+          "AAAADwAAAAZyZXZva2UAAA=="
+        ],
+        "value": "AAAAEQAAAAEAAAABAAAADwAAAAVhZG1pbgAAAAAAABIAAAAAAAAAAB8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+"
+      }
+    },
+    {
+      "name": "circuit.pause",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000002,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-0000000000000002",
+        "pagingToken": "1000002-2",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAdjaXJjdWl0AA==",
+          "AAAADwAAAAVwYXVzZQAAAA=="
+        ],
+        "value": "AAAAEQAAAAEAAAABAAAADwAAAAZjYWxsZXIAAAAAABIAAAAAAAAAAB8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+"
+      }
+    },
+    {
+      "name": "circuit.unpause",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000003,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-0000000000000003",
+        "pagingToken": "1000003-3",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAdjaXJjdWl0AA==",
+          "AAAADwAAAAd1bnBhdXNlAA=="
+        ],
+        "value": "AAAAEQAAAAEAAAABAAAADwAAAAVhZG1pbgAAAAAAABIAAAAAAAAAAB8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+"
+      }
+    },
+    {
+      "name": "stake.staked",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000004,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-0000000000000004",
+        "pagingToken": "1000004-4",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAVzdGFrZQAAAA==",
+          "AAAADwAAAAZzdGFrZWQAAA=="
+        ],
+        "value": "AAAAEQAAAAEAAAADAAAADwAAAAZhbW91bnQAAAAAAAoAAAAAAAAAAAAAAAAO5rKAAAAADwAAAAVqdXJvcgAAAAAAABIAAAAAAAAAAF1eX2BhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8AAAADwAAAAluZXdfdG90YWwAAAAAAAAKAAAAAAAAAAAAAAAADuaygA=="
+      }
+    },
+    {
+      "name": "stake.unstaked",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000005,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-0000000000000005",
+        "pagingToken": "1000005-5",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAVzdGFrZQAAAA==",
+          "AAAADwAAAAh1bnN0YWtlZA=="
+        ],
+        "value": "AAAAEQAAAAEAAAADAAAADwAAAAZhbW91bnQAAAAAAAoAAAAAAAAAAAAAAAAF9eEAAAAADwAAAAVqdXJvcgAAAAAAABIAAAAAAAAAAF1eX2BhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8AAAADwAAAAlyZW1haW5pbmcAAAAAAAAKAAAAAAAAAAAAAAAACPDRgA=="
+      }
+    },
+    {
+      "name": "juror.ttlbump",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000006,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-0000000000000006",
+        "pagingToken": "1000006-6",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAVqdXJvcgAAAA==",
+          "AAAADwAAAAd0dGxidW1wAA=="
+        ],
+        "value": "AAAAEQAAAAEAAAACAAAADwAAAAVqdXJvcgAAAAAAABIAAAAAAAAAAF1eX2BhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8AAAADwAAABFsaXZlX3VudGlsX2xlZGdlcgAAAAAAAAMAPQkA"
+      }
+    },
+    {
+      "name": "escrow.init",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000007,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-0000000000000007",
+        "pagingToken": "1000007-7",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAZlc2Nyb3cAAA==",
+          "AAAADwAAAARpbml0"
+        ],
+        "value": "AAAAEQAAAAEAAAAEAAAADwAAAAZhbW91bnQAAAAAAAoAAAAAAAAAAAAAAAAF9eEAAAAADwAAAAtiZW5lZmljaWFyeQAAAAASAAAAAAAAAAA+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXQAAAA8AAAAJZGVwb3NpdG9yAAAAAAAAEgAAAAAAAAAAHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4AAAAPAAAACWVzY3Jvd19pZAAAAAAAAAUAAAAAAAAAKg=="
+      }
+    },
+    {
+      "name": "mstone.release",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000008,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-0000000000000008",
+        "pagingToken": "1000008-8",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAZtc3RvbmUAAA==",
+          "AAAADwAAAAdyZWxlYXNlAA==",
+          "AAAABQAAAAAAAAAq",
+          "AAAAAwAAAAA="
+        ],
+        "value": "AAAAEQAAAAEAAAAHAAAADwAAAAtiZW5lZmljaWFyeQAAAAASAAAAAAAAAAA+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXQAAAA8AAAASYmVuZWZpY2lhcnlfcGF5b3V0AAAAAAAKAAAAAAAAAAAAAAAABe4/4AAAAA8AAAAPZXNjcm93X3JlbGVhc2VkAAAAAAoAAAAAAAAAAAAAAAAF9eEAAAAADwAAAAxncm9zc19hbW91bnQAAAAKAAAAAAAAAAAAAAAABfXhAAAAAA8AAAASbWlsZXN0b25lX3JlbGVhc2VkAAAAAAAKAAAAAAAAAAAAAAAABfXhAAAAAA8AAAAIdHJlYXN1cnkAAAASAAAAAAAAAAAfICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9PgAAAA8AAAAMdHJlYXN1cnlfZmVlAAAACgAAAAAAAAAAAAAAAAAHoSA="
+      }
+    },
+    {
+      "name": "vote.commit",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000009,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-0000000000000009",
+        "pagingToken": "1000009-9",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAR2b3Rl",
+          "AAAADwAAAAZjb21taXQAAA=="
+        ],
+        "value": "AAAAEQAAAAEAAAACAAAADwAAAAllc2Nyb3dfaWQAAAAAAAAFAAAAAAAAACoAAAAPAAAABWp1cm9yAAAAAAAAEgAAAAAAAAAAXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3w="
+      }
+    },
+    {
+      "name": "vote.reveal",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000010,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-00000000000000010",
+        "pagingToken": "1000010-10",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAR2b3Rl",
+          "AAAADwAAAAZyZXZlYWwAAA=="
+        ],
+        "value": "AAAAEQAAAAEAAAADAAAADwAAAAllc2Nyb3dfaWQAAAAAAAAFAAAAAAAAACoAAAAPAAAABWp1cm9yAAAAAAAAEgAAAAAAAAAAXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3wAAAAPAAAAEnZvdGVfZm9yX2RlcG9zaXRvcgAAAAAAAAAAAAE="
+      }
+    },
+    {
+      "name": "slash.slashed",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000011,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-00000000000000011",
+        "pagingToken": "1000011-11",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAVzbGFzaAAAAA==",
+          "AAAADwAAAAdzbGFzaGVkAA=="
+        ],
+        "value": "AAAAEQAAAAEAAAAFAAAADwAAAAllc2Nyb3dfaWQAAAAAAAAFAAAAAAAAACoAAAAPAAAABWp1cm9yAAAAAAAAEgAAAAAAAAAAXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3wAAAAPAAAAD3JlbWFpbmluZ19zdGFrZQAAAAAKAAAAAAAAAAAAAAAAC+vCAAAAAA8AAAAMc2xhc2hfYW1vdW50AAAACgAAAAAAAAAAAAAAAAL68IAAAAAPAAAAC3NsYXNoX2NvdW50AAAAAAMAAAAB"
+      }
+    },
+    {
+      "name": "escrow.ttlbump",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000012,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-00000000000000012",
+        "pagingToken": "1000012-12",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAZlc2Nyb3cAAA==",
+          "AAAADwAAAAd0dGxidW1wAA=="
+        ],
+        "value": "AAAAEQAAAAEAAAACAAAADwAAAAllc2Nyb3dfaWQAAAAAAAAFAAAAAAAAACoAAAAPAAAAEWxpdmVfdW50aWxfbGVkZ2VyAAAAAAAAAwA9CQA="
+      }
+    },
+    {
+      "name": "disputed (uncompiled contracts/src crate)",
+      "status": "abandoned — contracts/src is not a workspace member and is never compiled",
+      "raw": {
+        "type": "contract",
+        "ledger": 1000013,
+        "ledgerClosedAt": "2026-01-01T00:00:00Z",
+        "contractId": "CBKFEVKTKRDEYT2GJFMFIVKSIUYAAAAAAAAAAAAAAAAAAAAAAAAABGIC",
+        "id": "0000000000000000-00000000000000013",
+        "pagingToken": "1000013-13",
+        "topic": [
+          "AAAAEgAAAAFUUlVTVEZMT0ZJWFRVUkUwAAAAAAAAAAAAAAAAAAAAAA==",
+          "AAAADwAAAAhkaXNwdXRlZA==",
+          "AAAABQAAAAAAAAAq"
+        ],
+        "value": "AAAAEgAAAAAAAAAAHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4="
+      }
+    }
+  ]
+}

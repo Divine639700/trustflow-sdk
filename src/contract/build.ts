@@ -1,8 +1,20 @@
 import { Address, nativeToScVal } from '@stellar/stellar-sdk';
 import type { CreateEscrowParams } from '../types';
 import type { VotePayload } from '../types/juror';
+import { assertStellarAddress, isValidEscrowId } from '../utils/validation';
+import { TrustFlowError } from '../errors';
+
+function assertEscrowId(escrowId: string): void {
+  if (!isValidEscrowId(escrowId)) {
+    throw TrustFlowError.validation('escrowId', `not a usable escrow id: "${escrowId}"`);
+  }
+}
 
 export function buildCreateEscrowArgs(params: CreateEscrowParams): unknown[] {
+  // Reject a malformed address here (#111) so callers get a
+  // TrustFlowError.validation(...) instead of whatever `new Address()` throws.
+  assertStellarAddress(params.sender, 'sender');
+  assertStellarAddress(params.recipient, 'recipient');
   return [
     new Address(params.sender).toScVal(),
     new Address(params.recipient).toScVal(),
@@ -12,6 +24,8 @@ export function buildCreateEscrowArgs(params: CreateEscrowParams): unknown[] {
 }
 
 export function buildReleaseArgs(escrowId: string, caller: string): unknown[] {
+  assertEscrowId(escrowId);
+  assertStellarAddress(caller, 'caller');
   return [nativeToScVal(escrowId, { type: 'string' }), new Address(caller).toScVal()];
 }
 
@@ -53,6 +67,7 @@ export function buildFundArgs(
 }
 
 export function buildDisputeArgs(escrowId: string, reason: string): unknown[] {
+  assertEscrowId(escrowId);
   return [nativeToScVal(escrowId, { type: 'string' }), nativeToScVal(reason, { type: 'string' })];
 }
 

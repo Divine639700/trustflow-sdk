@@ -1,16 +1,14 @@
 export { useWallet } from './useWallet';
 export { useBalance } from './useBalance';
 export { useTransaction } from './useTransaction';
+export { useEscrow } from './useEscrow';
 
-// `useEscrow` is intentionally NOT exported here (#81). It imports
-// `createEscrow`/`releaseEscrow` as free functions from '../escrow' that
-// don't exist there — that module only exports classes (including
-// `TrustFlowEscrowClient`, which *does* have `createEscrow`/`releaseEscrow`
-// methods, but isn't what this hook's `client: TrustFlowClient` parameter
-// accepts; `TrustFlowClient` itself exposes no escrow methods at all). This
-// was invisible until now because no build entry point ever pulled in
-// `src/hooks/`, so the mismatch never got type-checked. Re-wiring
-// `useEscrow` against the real API is a separate, non-trivial fix (which
-// class/instance the hook should actually take, or whether `TrustFlowClient`
-// should grow an `escrow` accessor) and is left for a follow-up rather than
-// guessed at here.
+// `useEscrow` calls the free functions `createEscrow(client, params)` /
+// `releaseEscrow(client, params)`. Both are re-exported by
+// `src/escrow/index.ts` (from `create.ts` / `release.ts`) and both take a
+// `client: TrustFlowClient` and work through `invokeContract`, so the hook
+// type-checks and its create / release paths hit the real functions (#107).
+// Like the other hooks it ships only from the `@trustflow/sdk/react` subpath,
+// not the package root, so non-React consumers aren't forced to install
+// `react` (#81).
+export { TrustFlowError } from '../errors';

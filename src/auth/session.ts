@@ -5,6 +5,16 @@ const EXPIRES_AT_KEY = 'trustflow_expires_at';
 /** Default client-side token lifetime, used only when the backend doesn't supply one. */
 const DEFAULT_SESSION_TTL_MS = 15 * 60_000;
 
+/**
+ * Narrows a stored key to one account, so two signed-in accounts in the same
+ * browser never overwrite each other's token. Returns the legacy unscoped key
+ * when `scope` is omitted, which is what keeps single-account sessions written
+ * by earlier SDK versions readable.
+ */
+function scopedKey(key: string, scope?: string): string {
+  return scope ? `${key}:${scope}` : key;
+}
+
 export interface SessionStorageAdapter {
   get(key: string): string | null;
   set(key: string, value: string): void;
@@ -97,26 +107,41 @@ export interface Session {
 /**
  * Persists a session token.
  *
+ * Pass `scope` (an account id, in practice `client.accounts.active.id`) to keep
+ * concurrent sign-ins isolated: a scoped token lives under
+ * `trustflow_token:<scope>` and never collides with another account's, nor with
+ * the unscoped key a single-account app writes.
+ *
  * @param expiresAt - UNIX ms timestamp when the token expires. Defaults to
  *   `DEFAULT_SESSION_TTL_MS` from now when omitted, since the backend does
  *   not currently return a token TTL — see the `expiresAt` caveat on
  *   {@link Session} and docs/spikes/issue-79-retry-session-multisig.md.
+ * @param scope - Optional account scope; omit for the legacy single-session key.
  */
-export function saveSession(token: string, address: string, expiresAt?: number): void {
+export function saveSession(
+  token: string,
+  address: string,
+  expiresAt?: number,
+  scope?: string,
+): void {
   const storage = getStorage();
-  storage.set(TOKEN_KEY, token);
-  storage.set(ADDRESS_KEY, address);
-  storage.set(EXPIRES_AT_KEY, String(expiresAt ?? Date.now() + DEFAULT_SESSION_TTL_MS));
+  storage.set(scopedKey(TOKEN_KEY, scope), token);
+  storage.set(scopedKey(ADDRESS_KEY, scope), address);
+  storage.set(
+    scopedKey(EXPIRES_AT_KEY, scope),
+    String(expiresAt ?? Date.now() + DEFAULT_SESSION_TTL_MS),
+  );
 }
 
-export function loadSession(): Session | null {
+/** Reads the session for `scope`, or the unscoped single-account session. */
+export function loadSession(scope?: string): Session | null {
   const storage = getStorage();
-  const token = storage.get(TOKEN_KEY);
-  const address = storage.get(ADDRESS_KEY);
+  const token = storage.get(scopedKey(TOKEN_KEY, scope));
+  const address = storage.get(scopedKey(ADDRESS_KEY, scope));
   if (!token || !address) {
     return null;
   }
-  const expiresAtRaw = storage.get(EXPIRES_AT_KEY);
+  const expiresAtRaw = storage.get(scopedKey(EXPIRES_AT_KEY, scope));
   // Backward compatibility: a session written before expiry tracking existed
   // (or by an older version of this SDK) has no `EXPIRES_AT_KEY` entry at
   // all — `storage.get` returns `null`, not a malformed string. Treat that
@@ -130,11 +155,12 @@ export function loadSession(): Session | null {
   return { token, address, expiresAt: Number.isFinite(expiresAt) ? expiresAt : 0 };
 }
 
-export function clearSession(): void {
+/** Clears the session for `scope`, or the unscoped single-account session. */
+export function clearSession(scope?: string): void {
   const storage = getStorage();
-  storage.remove(TOKEN_KEY);
-  storage.remove(ADDRESS_KEY);
-  storage.remove(EXPIRES_AT_KEY);
+  storage.remove(scopedKey(TOKEN_KEY, scope));
+  storage.remove(scopedKey(ADDRESS_KEY, scope));
+  storage.remove(scopedKey(EXPIRES_AT_KEY, scope));
 }
 
 /** True when the stored session is missing or past its `expiresAt`. */

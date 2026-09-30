@@ -4,6 +4,38 @@ import { TrustFlowError } from '../src/errors';
 describe('TrustFlowClient', () => {
   const mockContractId = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4';
 
+  describe('getSorobanServer', () => {
+    it('returns the same cached instance across calls', () => {
+      const client = new TrustFlowClient({ contractId: mockContractId });
+
+      expect(client.getSorobanServer()).toBe(client.getSorobanServer());
+    });
+
+    it('builds the server from a custom rpcUrl when one is configured', () => {
+      const rpcUrl = 'https://custom-rpc.example.com';
+      const client = new TrustFlowClient({ contractId: mockContractId, rpcUrl });
+
+      expect(client.getSorobanServer().serverURL.toString()).toContain(
+        'custom-rpc.example.com',
+      );
+    });
+
+    it('falls back to the network default when no rpcUrl is given', () => {
+      const client = new TrustFlowClient({ contractId: mockContractId });
+
+      expect(client.getSorobanServer().serverURL.toString()).toContain(
+        new URL(client.rpcUrl).host,
+      );
+    });
+
+    it('gives separate clients their own server instances', () => {
+      const a = new TrustFlowClient({ contractId: mockContractId });
+      const b = new TrustFlowClient({ contractId: mockContractId });
+
+      expect(a.getSorobanServer()).not.toBe(b.getSorobanServer());
+    });
+  });
+
   describe('constructor', () => {
     it('should create client with minimal config', () => {
       const client = new TrustFlowClient({
@@ -61,6 +93,63 @@ describe('TrustFlowClient', () => {
 
       const config = client.getConfig();
       expect(config.apiConfigured).toBe(false);
+    });
+  });
+
+  describe('getBalance caching', () => {
+    const address = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    function mockBalanceLookup(client: TrustFlowClient, balance = '42.0000000') {
+      return jest
+        .spyOn(client.getServer(), 'loadAccount')
+        .mockResolvedValue({
+          balances: [{ asset_type: 'native', balance }],
+        } as any);
+    }
+
+    it('uses a cached balance within the configured TTL', async () => {
+      const client = new TrustFlowClient({
+        contractId: mockContractId,
+        balanceCache: { ttlMs: 5_000 },
+      });
+      const loadAccount = mockBalanceLookup(client);
+
+      await expect(client.getBalance(address)).resolves.toBe('42.0000000');
+      await expect(client.getBalance(address)).resolves.toBe('42.0000000');
+
+      expect(loadAccount).toHaveBeenCalledTimes(1);
+    });
+
+    it('fetches a new balance after the cache TTL expires', async () => {
+      jest.useFakeTimers();
+      const client = new TrustFlowClient({
+        contractId: mockContractId,
+        balanceCache: { ttlMs: 5_000 },
+      });
+      const loadAccount = mockBalanceLookup(client);
+
+      await client.getBalance(address);
+      jest.advanceTimersByTime(5_001);
+      await client.getBalance(address);
+
+      expect(loadAccount).toHaveBeenCalledTimes(2);
+    });
+
+    it('bypasses a cached balance when skipCache is requested', async () => {
+      const client = new TrustFlowClient({
+        contractId: mockContractId,
+        balanceCache: {},
+      });
+      const loadAccount = mockBalanceLookup(client);
+
+      await client.getBalance(address);
+      await client.getBalance(address, { skipCache: true });
+
+      expect(loadAccount).toHaveBeenCalledTimes(2);
     });
   });
 

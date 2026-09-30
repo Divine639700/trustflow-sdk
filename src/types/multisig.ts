@@ -25,6 +25,10 @@ export interface SignatureEntry {
    */
   signedXdr: string;
   addedAt: number;
+  /** Whether this signature has been cryptographically verified */
+  verified?: boolean;
+  /** UNIX timestamp (ms) when the signature was verified */
+  verifiedAt?: number;
 }
 
 /** Internal state of one pending multi-sig operation */
@@ -43,6 +47,13 @@ export interface MultiSigOperation {
   status: MultiSigOperationStatus;
   createdAt: number;
   expiresAt?: number;
+  /**
+   * UNIX timestamp (ms) at which the operation reached a terminal status
+   * (`submitted` or `expired`). Used by `MultiSigEscrowClient.prune` to decide
+   * when a completed operation may be evicted from memory. Absent while the
+   * operation is still `pending`/`ready`.
+   */
+  terminalAt?: number;
 }
 
 /** Parameters for initiating a new multi-sig operation */

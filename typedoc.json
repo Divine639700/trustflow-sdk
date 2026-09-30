@@ -1,6 +1,13 @@
 {
   "$schema": "https://typedoc.org/schema.json",
-  "entryPoints": ["src/index.ts", "src/hooks/index.ts"],
+  "entryPoints": [
+    "src/index.ts",
+    "src/hooks/index.ts",
+    "src/escrow/index.ts",
+    "src/wallet/index.ts",
+    "src/utils/index.ts",
+    "src/testing/index.ts"
+  ],
   "out": "docs/reference",
   "tsconfig": "./tsconfig.json",
   "name": "TrustFlow SDK",
@@ -8,8 +15,14 @@
   "excludePrivate": true,
   "excludeInternal": true,
   "excludeExternals": true,
-  "exclude": ["**/*.test.ts", "examples/**", "tests/**"],
-  "sort": ["source-order"],
+  "exclude": [
+    "**/*.test.ts",
+    "examples/**",
+    "tests/**"
+  ],
+  "sort": [
+    "source-order"
+  ],
   "cleanOutputDir": true,
   "skipErrorChecking": true
 }

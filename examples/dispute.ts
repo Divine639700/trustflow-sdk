@@ -2,7 +2,7 @@
  * Example: Raise a dispute on an active escrow
  */
 import { TrustFlowClient } from '../src/client';
-import { disputeEscrow } from '../src/escrow/dispute';
+import { disputeEscrow } from '../src/escrow';
 import { connectWallet } from '../src/wallet/connect';
 
 async function main() {

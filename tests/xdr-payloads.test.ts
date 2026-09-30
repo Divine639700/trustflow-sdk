@@ -1,4 +1,5 @@
 import { Keypair, xdr } from '@stellar/stellar-sdk';
+import './support/scval-matchers';
 import {
     buildCreateEscrowArgs,
     buildReleaseArgs,

@@ -59,6 +59,7 @@ describe('IPFSStorage.upload', () => {
         apiKey: 'test-key',
       }),
     );
+    expect(mockHttpPost.mock.calls[0][0]).toBe('');
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data.url).toBe('https://custom-gateway.example.com/ipfs/bafy456');
@@ -74,14 +75,70 @@ describe('IPFSStorage.upload', () => {
       contentType: 'application/pdf',
     });
 
-    expect(jest.mocked(createApiHttpClient)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        additionalHeaders: expect.objectContaining({
-          'Content-Type': 'application/pdf',
-          'X-Name': 'doc.pdf',
-        }),
-      }),
+    expect(mockHttpPost).toHaveBeenCalledWith('', expect.anything(), {
+      headers: { 'Content-Type': 'application/pdf', 'X-Name': 'doc.pdf' },
+    });
+  });
+
+  it('requests the exact configured apiUrl, including a query string', async () => {
+    const axios = jest.requireActual('axios');
+    const apiUrl = 'https://host.example/upload?token=abc';
+    new IPFSStorage({ apiUrl });
+    const { baseURL } = jest.mocked(createApiHttpClient).mock.calls[0][0];
+    expect(axios.getUri({ baseURL, url: '' })).toBe(apiUrl);
+
+    new IPFSStorage();
+    const defaults = jest.mocked(createApiHttpClient).mock.calls[1][0];
+    expect(axios.getUri({ baseURL: defaults.baseURL, url: '' })).toBe(
+      'https://api.web3.storage/upload',
     );
+  });
+
+  it('accepts a File and uses its name and type as defaults', async () => {
+    mockHttpPost.mockResolvedValueOnce({ data: { cid: 'bafyfile' } });
+    const storage = new IPFSStorage();
+    const result = await storage.upload(new File(['hello'], 'note.txt', { type: 'text/plain' }));
+
+    expect(result.ok).toBe(true);
+    const [, body, config] = mockHttpPost.mock.calls[0];
+    expect(body).toBeInstanceOf(Uint8Array);
+    expect(body.byteLength).toBe(5);
+    expect(config.headers).toEqual({ 'Content-Type': 'text/plain', 'X-Name': 'note.txt' });
+  });
+
+  it('accepts a Blob and lets options override its type', async () => {
+    mockHttpPost.mockResolvedValue({ data: { cid: 'bafyblob' } });
+    const storage = new IPFSStorage();
+    await storage.upload(new Blob(['abc'], { type: 'text/plain' }));
+    expect(mockHttpPost.mock.calls[0][2].headers).toEqual({ 'Content-Type': 'text/plain' });
+
+    await storage.upload(new Blob(['abc'], { type: 'text/plain' }), {
+      contentType: 'application/pdf',
+    });
+    expect(mockHttpPost.mock.calls[1][2].headers['Content-Type']).toBe('application/pdf');
+  });
+
+  it('accepts an ArrayBuffer and rejects empty Blob and ArrayBuffer inputs', async () => {
+    mockHttpPost.mockResolvedValueOnce({ data: { cid: 'bafybuf' } });
+    const storage = new IPFSStorage();
+    const ok = await storage.upload(new Uint8Array([1, 2, 3]).buffer);
+    expect(ok.ok).toBe(true);
+    expect(mockHttpPost.mock.calls[0][1]).toBeInstanceOf(Uint8Array);
+
+    const emptyBlob = await storage.upload(new Blob([]));
+    const emptyBuf = await storage.upload(new ArrayBuffer(0));
+    expect(emptyBlob.ok).toBe(false);
+    expect(emptyBuf.ok).toBe(false);
+    expect(mockHttpPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates the HTTP client once and reuses it across uploads', async () => {
+    mockHttpPost.mockResolvedValue({ data: { cid: 'bafy1' } });
+    const storage = new IPFSStorage();
+    await storage.upload(Buffer.from('a'));
+    await storage.upload(Buffer.from('b'));
+    expect(jest.mocked(createApiHttpClient)).toHaveBeenCalledTimes(1);
+    expect(mockHttpPost).toHaveBeenCalledTimes(2);
   });
 
   it('returns an error when the response has no cid', async () => {

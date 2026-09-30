@@ -1,0 +1,76 @@
+# CODEOWNERS — Define who should review code changes in specific areas
+
+# Default — all files require review from maintainers
+* @trustflow-protocol/maintainers
+
+# Core client and configuration
+/src/client.ts @trustflow-protocol/maintainers
+/src/types.ts @trustflow-protocol/maintainers
+/src/types/ @trustflow-protocol/maintainers
+/src/constants.ts @trustflow-protocol/maintainers
+/src/index.ts @trustflow-protocol/maintainers
+
+# Error handling — critical for correctness
+/src/errors.ts @trustflow-protocol/maintainers
+
+# Escrow operations
+/src/escrow/ @trustflow-protocol/maintainers
+
+# Authentication and session management — critical for security
+/src/auth/ @trustflow-protocol/maintainers
+
+# Wallet integration — critical for key handling
+/src/wallet/ @trustflow-protocol/maintainers
+
+# Contract interaction and Soroban integration
+/src/contract/ @trustflow-protocol/maintainers
+
+# Transaction pipeline — critical for correctness
+/src/tx-pipeline/ @trustflow-protocol/maintainers
+
+# Utilities
+/src/utils/ @trustflow-protocol/maintainers
+
+# Dispute resolution
+/src/juror/ @trustflow-protocol/maintainers
+
+# Profiles
+/src/profile/ @trustflow-protocol/maintainers
+
+# Storage
+/src/storage/ @trustflow-protocol/maintainers
+
+# Stellar network utilities
+/src/stellar/ @trustflow-protocol/maintainers
+
+# React hooks
+/src/hooks/ @trustflow-protocol/maintainers
+
+# Events
+/src/events.ts @trustflow-protocol/maintainers
+
+# Validation schemas
+/src/schemas.ts @trustflow-protocol/maintainers
+
+# Documentation
+/docs/ @trustflow-protocol/maintainers
+/README.md @trustflow-protocol/maintainers
+/CONTRIBUTING.md @trustflow-protocol/maintainers
+/SECURITY.md @trustflow-protocol/maintainers
+
+# Build and configuration
+/tsup.config.ts @trustflow-protocol/maintainers
+/jest.config.js @trustflow-protocol/maintainers
+/eslint*.config.mjs @trustflow-protocol/maintainers
+/package.json @trustflow-protocol/maintainers
+/tsconfig*.json @trustflow-protocol/maintainers
+/prettier* @trustflow-protocol/maintainers
+
+# GitHub configuration
+/.github/ @trustflow-protocol/maintainers
+
+# Changelog
+/CHANGELOG.md @trustflow-protocol/maintainers
+
+# Tests — always require review
+/tests/ @trustflow-protocol/maintainers

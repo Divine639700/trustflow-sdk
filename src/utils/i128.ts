@@ -22,9 +22,7 @@ function normalizeToBigInt(value: Int128Like): bigint {
 
   if (typeof value === 'number') {
     if (!Number.isInteger(value)) {
-      throw new RangeError(
-        `i128/u128 conversion is lossless-only: ${value} is not an integer`,
-      );
+      throw new RangeError(`i128/u128 conversion is lossless-only: ${value} is not an integer`);
     }
     if (!Number.isSafeInteger(value)) {
       throw new RangeError(

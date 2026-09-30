@@ -1,7 +1,7 @@
 # 📦 TrustFlow SDK
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.0-blue.svg)](https://www.typescriptlang.org/)
 
 > **Type-safe TypeScript SDK for building gig-economy applications on the TrustFlow Protocol (Stellar/Soroban).**
 
@@ -221,6 +221,10 @@ const result = await client.storage.upload(fileBuffer, { filename: 'contract.pdf
 if (result.ok) console.log('Uploaded:', result.data.url);
 ```
 
+`upload()` accepts a `Buffer`, `Uint8Array`, `ArrayBuffer`, `Blob` or a browser `File` directly
+(e.g. from an `<input type="file">`); a `File`'s name and type are forwarded as the default
+filename and content type. The request is sent to `apiUrl` exactly as configured.
+
 `IPFSStorage` can also be used standalone via `new IPFSStorage(config)`, and points at a
 web3.storage-compatible raw-body upload API by default — pass `apiUrl` to target a different
 IPFS pinning service.
@@ -252,11 +256,85 @@ IPFS pinning service.
   server-appropriate adapter for server-rendered code paths, and only rely on the automatic
   `localStorage` detection in code you know runs client-side.
 
+Sessions can be scoped to an account. `saveSession` / `loadSession` / `clearSession` take an
+optional fourth/second `scope` argument; `client.setSession(token, { account })` /
+`client.getSession({ account })` / `client.clearSession({ account })` pass the account id for you,
+so two accounts signed in on the same origin never overwrite each other's token. Omitting the
+scope keeps the legacy single-session key, so sessions written by earlier versions still load.
+
 Sessions also carry an `expiresAt`, checked via `isSessionExpired()`. This is a **best-effort,
 client-side value** — the backend does not currently return a token TTL (tracked in
 [#82](https://github.com/trustflow-protocol/trustflow-sdk/issues/82)), so treat it as a lower
 bound, not a guarantee, and still handle a `401` from the backend even when
 `isSessionExpired()` returns `false`.
+
+### Multiple Accounts in One Client
+
+A `TrustFlowClient` can act as many accounts. Register them on `client.accounts`, then switch
+with `client.useAccount(id)` — a field write, not a re-initialisation: the Horizon server,
+the Soroban RPC server, the retry budget and the IPFS helper are all shared and stay warm.
+
+```typescript
+const client = new TrustFlowClient({
+  contractId,
+  accounts: [
+    { id: 'alice', address: ALICE, label: 'Alice', roles: ['depositor'] },
+    { id: 'bob',   address: BOB,   label: 'Bob',   roles: ['beneficiary'] },
+  ],
+});
+
+client.useAccount('bob');                       // switch — no reconnect
+await client.getAccountInfo();                  // Bob's balance + sequence
+
+await client.getAccountInfo({ account: 'alice' });  // one call, active unchanged
+```
+
+Every account-scoped method takes an optional `account`, so a single call can target an account
+other than the active one. Per-account state is namespaced by account id, so switching can never
+leak one account's session or credentials into another's request:
+
+```typescript
+client.setSession('bob-token', { account: 'bob' });
+client.getSession({ account: 'alice' });   // null — a different account's session
+
+// Per-account API keys override the client-wide one; the selected account is
+// identified on the request.
+client.accounts.update('carol', { apiKey: 'carol-backend-token' });
+client.getAuthHeaders({ account: 'carol' });   // Authorization: Bearer carol-backend-token
+
+// Scope a block of calls, then restore the previous selection (even on throw).
+await client.asAccount('alice', async () => { /* … */ });
+
+// Persist and restore across reloads.
+localStorage.setItem('accounts', JSON.stringify(client.accounts.exportState()));
+client.accounts.importState(JSON.parse(localStorage.getItem('accounts')!));
+```
+
+Naming an unregistered account throws a `TrustFlowError` with code `ACCOUNT_NOT_FOUND`. With **no**
+accounts configured the client behaves exactly as before — single account, no context, no new
+errors — so existing integrations need no changes. A runnable tour is in
+[`examples/multi-account.ts`](./examples/multi-account.ts) (`npm run examples:multi-account`).
+
+### Retry Behaviour
+
+Horizon reads, Soroban RPC calls and raw `fetch` helpers retry **only transient** failures
+(network errors, timeouts, `429`, `5xx`, Soroban `TRY_AGAIN_LATER`) with capped exponential
+backoff, jitter, and a `Retry-After` header honoured when the server sends one. `4xx`, simulation
+errors, node `ERROR` rejections and on-chain `FAILED` results fail fast. One `retry` block
+configures all of them:
+
+```typescript
+const client = new TrustFlowClient({
+  contractId,
+  retry: { retries: 4, retryDelayMs: 500, maxRetryDelayMs: 10_000 },
+});
+```
+
+`retries` counts *extra* attempts, so `retries: 0` disables retrying. Non-idempotent requests
+(`POST`/`PATCH`) are not replayed on `5xx` or a transport error by default, because the server
+may have processed the request before the response was lost; opt a specific call in with
+`{ trustflowRetry: true }`. `DisputeClientOptions`, `ProfileClientOptions`, `IPFSConfig`,
+`AuthRequestOptions` and `getGigs(params, options)` all accept the same `retry` block.
 
 ### Multisig Cross-Process Coordination
 
@@ -296,17 +374,23 @@ responsibility until a native, backend-backed `MultiSigStateStore` lands — tra
 - **⚖️ Dispute Resolution**: Raise and track disputes with on-chain governance
 - **🗳️ Juror Voting**: Cast plaintext or encrypted votes on disputes via `JurorClient`
 - **📦 IPFS Storage**: Upload files to IPFS via `client.storage.upload()` or standalone `IPFSStorage`
-- **🔁 Backend API Auto-Retries**: Resilient backend calls via `axios-retry` for transient failures
+- **🔁 Transient-Only Retries**: Horizon, Soroban RPC, backend and IPFS calls all retry network errors, timeouts, `429`/`5xx` and node deferrals with capped, jittered backoff — and never replay a `4xx`, a simulation error or an on-chain failure. Configured once via `ClientConfig.retry`
+- **🧑️ Multiple Accounts**: One client, many accounts — switch with `useAccount(id)`, target one with `{ account }`, per-account sessions/caches/keys via `client.accounts`
+- **🌐 Browser-Ready**: Bundles for Webpack 5, Rollup, esbuild and Vite with **no Node polyfill configuration**; explicit WebCrypto detection with actionable errors
 - **🔑 Wallet Integration**: Built-in support for Freighter wallet
+- **📱 Mobile wallet links**: `generateSep7Uri` from `@trustflow/sdk/wallet` encodes prepared transaction XDR as a SEP-0007 deep link or QR text payload (see [wallet API](docs/API.md#sep-0007-transaction-deep-links-and-qr-data)).
 - **📊 Event Monitoring**: Real-time escrow state change tracking
 - **🛡️ Type Safety**: Full TypeScript support with Zod validation schemas
 - **🧪 Test Coverage**: Comprehensive Jest test suite
 
 ### Architecture Highlights
 
-- **Result Types**: No thrown exceptions in public APIs — all errors returned as `SDKResult<T>`
-- **Immutable Builders**: Fluent APIs like `EscrowBuilder` for parameter construction
-- **Network Agnostic**: Easily switch between Testnet and Mainnet
+- **No thrown exceptions in class APIs** — `TrustFlowEscrowClient` returns `SDKResult<T>` (never throws) for safe, predictable error handling
+- **Multi-stage pipeline** — `TransactionPipeline` orchestrates assemble → simulate → prepare → fee-bump → submit with typed `PipelineResult<T>` errors and built-in exponential backoff retries
+- **Two API styles** — Class-based for long-lived services, function-based for scripts (throws `TrustFlowError` on failure)
+- **Typed error codes** — Branch on `error.code` (ASSEMBLY_ERROR, SIMULATION_ERROR, etc.) instead of message strings
+- **Builder snapshots** — `EscrowBuilder.build()` returns an independent copy of its params, so a builder can be reused as a template and earlier results are never mutated by later `set*` calls
+- **Network Agnostic**: Easily switch between Testnet and Mainnet with custom RPC URLs
 - **Pure Utilities**: Side-effect-free helper functions for formatting and validation
 
 Read more in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
@@ -321,7 +405,22 @@ React hooks for wallet, balance, and transaction state are available from the `@
 import { useWallet, useBalance, useTransaction } from '@trustflow/sdk/react';
 ```
 
-`react` (`^18.0.0 || ^19.0.0`) is a peer dependency, required only if you import from `/react`. Note: `useEscrow` is not yet exported here — it's implemented against an API that doesn't currently exist on `TrustFlowClient` (tracked in [#81](https://github.com/trustflow-protocol/trustflow-sdk/issues/81)).
+`react` (`^18.0.0 || ^19.0.0`) is a peer dependency, required only if you import from `/react`. `useEscrow` is exported here too — it wraps the standalone `createEscrow` / `releaseEscrow` functions with loading / error state.
+
+**This entry is a client module.** It uses `useState`, `useEffect` and `useCallback`, so `dist/hooks/index.js` and `dist/hooks/index.mjs` are emitted with a leading `'use client'` directive. In the Next.js App Router that means you can import the hooks straight from a Server Component without wrapping them in your own client file:
+
+```tsx
+// app/page.tsx — a Server Component, no 'use client' needed
+import { useWallet } from '@trustflow/sdk/react';
+
+export default function Page() {
+  /* ... */
+}
+```
+
+The other entries — the root, `/escrow`, `/wallet` and `/utils` — are deliberately **not** marked as client modules, so they stay usable on the server. The directive is injected into the build output rather than written in the source, because bundlers drop module-level directives; `npm run build` runs `scripts/inject-use-client.js` after `tsup` to do it, and `tests/use-client-directive.test.ts` fails the build if it ever goes missing or spreads to a non-React entry.
+
+The `@trustflow/sdk/escrow`, `@trustflow/sdk/wallet`, and `@trustflow/sdk/utils` subpaths used in the Quick Start above are declared in `package.json`'s `exports` and built as their own targets, so those imports resolve against the published package as well as from source.
 
 ---
 
@@ -329,7 +428,11 @@ import { useWallet, useBalance, useTransaction } from '@trustflow/sdk/react';
 
 - **[Quick Start Guide](./docs/QUICKSTART.md)** — Get up and running in 5 minutes
 - **[API Reference](./docs/API.md)** — Complete API documentation
+- **[Contract Bindings](./docs/CONTRACT_BINDINGS.md)** — Spec-driven contract clients and the JS-to-Soroban type mapping
 - **[Architecture](./docs/ARCHITECTURE.md)** — Design principles and module structure
+- **[Browser & Bundler Compatibility](./docs/BROWSER_COMPATIBILITY.md)** — Supported browsers, WebCrypto detection and polyfills, and which bundlers need no configuration
+- **[Versioning Policy](./docs/VERSIONING.md)** — Semantic versioning, what counts as a breaking change, and the deprecation policy
+- **[Upgrading](./docs/UPGRADING.md)** — Migration steps for releases with breaking changes, and current deprecations
 - **[Examples](./examples/)** — Working code examples for common use cases
 - **API reference (generated)** — run `npm run docs` to build a browsable HTML API reference
   from JSDoc comments into `docs/reference/` (not committed; regenerate locally or in CI)
@@ -342,7 +445,7 @@ The SDK is under active development. Here's what's coming:
 
 ### In Progress
 - [x] Tsup bundler configuration for ESM/CJS exports
-- [ ] NPM publishing pipeline with provenance
+- [x] NPM publishing pipeline with provenance
 - [x] Simulation wrappers for transaction cost estimation (`TransactionPipeline`)
 - [x] Auto-retry logic for backend API endpoints (`axios-retry`)
 
@@ -366,23 +469,31 @@ We welcome contributions! To get started:
 3. Run tests: `npm test`
 4. Submit a PR
 
-Please ensure:
-- Tests pass (`npm test`)
-- Linting passes (`npm run lint`)
-- Code is formatted (`npm run format`)
+**New contributors**: Start with [CONTRIBUTING.md](./CONTRIBUTING.md) for a complete setup guide, development workflow, and conventions. It covers:
+- Node.js setup and available npm commands
+- Running tests and checking coverage
+- Code style and documentation requirements
+- Branch naming, commit messages, and changelog entries
+- How to get listed in [CONTRIBUTORS.md](./CONTRIBUTORS.md)
 
-Check [CONTRIBUTING.md](./CONTRIBUTING.md) for detailed guidelines.
+For detailed issue and PR templates, see [.github/ISSUE_TEMPLATE/](./.github/ISSUE_TEMPLATE/) and [.github/PULL_REQUEST_TEMPLATE.md](./.github/PULL_REQUEST_TEMPLATE.md).
 
 ---
 
 ## 🔒 Security
 
+We take security seriously. This SDK builds and signs financial transactions on Stellar.
+
+**Report security issues privately** via [SECURITY.md](./SECURITY.md) — do not open public issues for vulnerabilities.
+
+Security features:
 - **Strict Linting**: ESLint strict mode enforced across the codebase
 - **Input Validation**: All parameters validated with Zod schemas
 - **Type Safety**: TypeScript strict mode prevents runtime errors
 - **Test Coverage**: Critical paths covered by Jest integration tests
+- **Supported versions**: See [SECURITY.md](./SECURITY.md) for versioning and expected response times
 
-Report security issues to: security@trustflow.xyz
+For the full security policy, including scope, supported versions, and responsible disclosure guidelines, see [SECURITY.md](./SECURITY.md).
 
 ---
 

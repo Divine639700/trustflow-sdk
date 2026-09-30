@@ -2,13 +2,31 @@ import type { SDKResult } from '../types/index';
 import type { Profile, UpdateProfileParams } from '../types/profile';
 import { isValidStellarAddress } from '../utils/validation';
 import { createApiHttpClient, toApiErrorMessage } from '../utils/http';
+import type { ApiRetryConfig } from '../utils/http';
+import type { HttpInterceptors } from '../utils/interceptors';
 
 export interface ProfileClientOptions {
+  /** Per-request timeout (ms) applied to backend profile calls. */
   timeoutMs?: number;
+  /**
+   * Retry budget for backend calls. Defaults to 3 retries with a 250ms base
+   * delay and a 2s cap.
+   *
+   * Only transient failures are retried, and only for idempotent methods:
+   * `getProfile` (`GET`) is retried, `updateProfile` (`PUT`, which is
+   * idempotent) is retried, and neither is retried on `4xx`.
+   */
+  retry?: ApiRetryConfig;
+  /** Request/response interceptor hooks applied to profile API calls. */
+  interceptors?: HttpInterceptors;
 }
 
 /**
  * Type-safe Axios wrapper for the TrustFlow backend's `/profiles` endpoints.
+ *
+ * **Retry behaviour:** `getProfile` is a `GET` and `updateProfile` a `PUT`, both
+ * idempotent, so `429`, `5xx` and transport errors are retried with capped,
+ * jittered backoff (honouring `Retry-After`), while `4xx` fails immediately.
  *
  * @example
  * ```typescript
@@ -28,6 +46,8 @@ export class ProfileClient {
     this.http = createApiHttpClient({
       baseURL: this.apiUrl,
       timeoutMs: options.timeoutMs,
+      retry: options.retry,
+      interceptors: options.interceptors,
       additionalHeaders: {
         Authorization: `Bearer ${this.token}`,
       },
@@ -37,7 +57,8 @@ export class ProfileClient {
   /**
    * Fetches a user's profile from the backend API.
    *
-   * Transient backend failures are automatically retried before returning an error.
+   * Retries transient backend failures (network error, timeout, `429`, `5xx`)
+   * with capped, jittered backoff before returning an error.
    */
   async getProfile(address: string): Promise<SDKResult<Profile>> {
     if (!isValidStellarAddress(address)) {
@@ -54,7 +75,9 @@ export class ProfileClient {
   /**
    * Updates a user's profile via the backend API.
    *
-   * Transient backend failures are automatically retried before returning an error.
+   * `PUT` is idempotent, so transient backend failures (network error, timeout,
+   * `429`, `5xx`) are retried with capped, jittered backoff before returning an
+   * error. `4xx` fails immediately.
    */
   async updateProfile(address: string, params: UpdateProfileParams): Promise<SDKResult<Profile>> {
     if (!isValidStellarAddress(address)) {

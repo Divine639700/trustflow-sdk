@@ -3,16 +3,21 @@ export interface FreighterWallet {
   getPublicKey(): Promise<string>;
   signTransaction(xdr: string, opts: { network: string }): Promise<{ signedXDR: string }>;
   getNetwork(): Promise<string>;
+  /**
+   * Signs an arbitrary message (not a transaction) with the wallet's keypair.
+   *
+   * @param message - The message to sign as a UTF-8 string
+   * @returns Base64-encoded ed25519 signature of the UTF-8 message bytes
+   */
+  signMessage(message: string): Promise<string>;
 }
 
 interface FreighterWindow {
   freighter?: {
     getPublicKey(): Promise<string>;
-    signTransaction(
-      xdr: string,
-      opts: { network: string },
-    ): Promise<{ signedXDR: string }>;
+    signTransaction(xdr: string, opts: { network: string }): Promise<{ signedXDR: string }>;
     getNetwork(): Promise<string>;
+    signMessage(message: string): Promise<string>;
   };
 }
 
@@ -31,6 +36,7 @@ export function getFreighter(): FreighterWallet | null {
     getPublicKey: () => w.getPublicKey(),
     signTransaction: (xdr, opts) => w.signTransaction(xdr, opts),
     getNetwork: () => w.getNetwork(),
+    signMessage: (message) => w.signMessage(message),
   };
 }
 

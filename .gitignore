@@ -3,9 +3,14 @@ dist/
 .env
 .env.local
 coverage/
+.jest-cache/
 *.js.map
 *.tsbuildinfo
 docs/reference/
+fix.md
 
 # IDE
 dist
+
+# Bundler example build output
+examples/bundlers/*/dist/

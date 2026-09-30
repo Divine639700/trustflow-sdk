@@ -1,14 +1,8 @@
-// Hooks require a React environment — these are minimal stubs to verify module structure
-// Full hook testing would require React testing environment
+/** @jest-environment jsdom */
+import * as hooks from '../src/hooks';
 
-describe('hook stubs', () => {
-  it('useEscrow module exists', () => {
-    expect(() => require.resolve('../src/hooks/useEscrow')).not.toThrow();
-  });
-  it('useWallet module exists', () => {
-    expect(() => require.resolve('../src/hooks/useWallet')).not.toThrow();
-  });
-  it('useTransaction module exists', () => {
-    expect(() => require.resolve('../src/hooks/useTransaction')).not.toThrow();
+describe('hooks barrel', () => {
+  it.each(['useWallet', 'useBalance', 'useTransaction', 'useEscrow'])('exports %s', (name) => {
+    expect(typeof (hooks as unknown as Record<string, unknown>)[name]).toBe('function');
   });
 });
