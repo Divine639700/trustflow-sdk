@@ -378,6 +378,7 @@ responsibility until a native, backend-backed `MultiSigStateStore` lands — tra
 - **🧑️ Multiple Accounts**: One client, many accounts — switch with `useAccount(id)`, target one with `{ account }`, per-account sessions/caches/keys via `client.accounts`
 - **🌐 Browser-Ready**: Bundles for Webpack 5, Rollup, esbuild and Vite with **no Node polyfill configuration**; explicit WebCrypto detection with actionable errors
 - **🔑 Wallet Integration**: Built-in support for Freighter wallet
+- **📱 Mobile wallet links**: `generateSep7Uri` from `@trustflow/sdk/wallet` encodes prepared transaction XDR as a SEP-0007 deep link or QR text payload (see [wallet API](docs/API.md#sep-0007-transaction-deep-links-and-qr-data)).
 - **📊 Event Monitoring**: Real-time escrow state change tracking
 - **🛡️ Type Safety**: Full TypeScript support with Zod validation schemas
 - **🧪 Test Coverage**: Comprehensive Jest test suite

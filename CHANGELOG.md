@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Wallet SEP-0007 transaction URIs (#379)
+
+- Issue #379: Added `generateSep7Uri` for mobile wallet deep links and QR payloads, with SEP-0007 parameter encoding and URI size validation.
 ### Versioning strategy and breaking change policy (#239)
 
 - Added `docs/VERSIONING.md`: how semantic versioning applies on `0.x` and from 1.0.0, what the

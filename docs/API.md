@@ -337,6 +337,34 @@ After obtaining a token, persist it using the session storage functions:
 
 Wallet integration utilities for connecting to Stellar wallets (Freighter, Albedo, and others) and managing connections.
 
+### SEP-0007 transaction deep links and QR data
+
+`generateSep7Uri(xdr, options?)` from `@trustflow/sdk/wallet` accepts a base64-encoded
+`TransactionEnvelope` and returns a `web+stellar:tx` URI. Use that entire URI as a mobile
+wallet deep link or the text payload of a QR code. It does not render an image or sign the request.
+
+Options are `callbackUrl` (an absolute HTTP(S) URL encoded as a SEP-0007 `url:` callback),
+`message` (at most 300 characters), `originDomain` (a fully qualified domain),
+`networkPassphrase` (set this for non-public networks), and `maxUriLength` (an integer byte
+cap from 1 to 2953). The default cap is `SEP7_MAX_URI_LENGTH` (2953), the maximum byte-mode
+payload of a version-40 QR code at low error correction. Set a smaller cap when your QR renderer or error
+correction setting requires it. Invalid input or excess length throws `TrustFlowError` with
+`VALIDATION_ERROR`.
+
+SEP-0007 wallets should display `origin_domain` only after verifying a URI signature. This
+generator does not sign URI requests, so passing `originDomain` alone does not establish a
+trusted origin label in a wallet.
+
+```typescript
+import { generateSep7Uri } from '@trustflow/sdk/wallet';
+
+const uri = generateSep7Uri(preparedXdr, {
+  networkPassphrase: 'Test SDF Network ; September 2015',
+  message: 'Review escrow release',
+});
+// Use `uri` as the QR text payload or a wallet deep link.
+```
+
 ### Supported Wallet Types
 
 - `'freighter'` — Freighter browser extension (default)
