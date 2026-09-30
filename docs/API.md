@@ -799,57 +799,127 @@ if (!result.ok) {
 }
 ```
 
-### Error Codes (`TrustFlowErrorCode`)
+### Error Codes (`TrustFlowErrorCode`) Matrix
 
-| Error Code | Produced By | Description |
-|---|---|---|
-| `CONNECTION_ERROR` | Auth, client connection, backend API | Network/RPC connection failure or backend unreachable |
-| `CONTRACT_ERROR` | Contract invocation | Contract returned an error or failed |
-| `VALIDATION_ERROR` | Escrow functions, wallet functions, client init | Input or schema validation failure |
-| `UNAUTHORIZED` | Wallet connection, auth flow, wallet not supported | Unauthorized action, missing permissions, or unsupported wallet |
-| `NOT_FOUND` | Escrow queries | Requested escrow or resource not found |
-| `SIMULATION_ERROR` | TransactionPipeline.simulate/prepare | Soroban transaction simulation failed |
-| `SIGNING_ERROR` | *Reserved* (not produced yet; tracked in [#292](https://github.com/trustflow-protocol/trustflow-sdk/issues/292)) | Transaction signing failed |
-| `INVALID_CONFIG` | TrustFlowClient constructor | Invalid or missing client configuration (e.g., missing contractId) |
-| `NOT_CONNECTED` | Client methods before connect() | Operation attempted before client connected |
-| `BALANCE_FETCH_ERROR` | TrustFlowClient.getBalance() | Failed to query balance from Horizon/RPC |
-| `MULTISIG_ERROR` | MultiSigEscrowClient (internally) | Generic multi-sig workflow error; callers receive `{ ok: false; error: string }` in SDKResult instead |
-| `MULTISIG_THRESHOLD_NOT_MET` | *Reserved* (not produced; MultiSigEscrowClient returns SDKResult strings) | Signatures collected less than required threshold |
-| `MULTISIG_ALREADY_SIGNED` | *Reserved* | Signer has already signed this operation |
-| `MULTISIG_EXPIRED` | *Reserved* | Multi-sig operation expired |
-| `MULTISIG_INVALID_SIGNER` | *Reserved* | Address not an authorized multi-sig signer |
-| `MULTISIG_XDR_ERROR` | *Reserved* | XDR serialization/decoding error during multi-sig |
-| `ASSEMBLY_ERROR` | TransactionPipeline.assemble | Soroban transaction assembly failure |
-| `FEE_BUMP_ERROR` | TransactionPipeline.buildFeeBump | Fee-bump transaction construction failure |
-| `SUBMISSION_ERROR` | TransactionPipeline.submit | Transaction submission to RPC failed |
-| `RETRY_EXHAUSTED` | TransactionPipeline (any stage) | Retry attempts exceeded for the operation |
-| `NETWORK_ERROR` | Backend API, RPC | Transport/network level error |
-| `AUTH_ERROR` | Auth challenge/verification | Authentication challenge or verification failure |
-| `TIMEOUT` | *Reserved* (not produced yet; tracked in [#215](https://github.com/trustflow-protocol/trustflow-sdk/issues/215)) | Operation timed out |
-| `INVALID_CONTRACT_CALL` | Contract invocation | Invalid contract method or arguments |
+The SDK uses `TrustFlowErrorCode` to classify all failure modes. Each error instance provides an actionable `.code`, optional `.field` and `.issues` for validation details, and an underlying `.cause`.
 
-**Legend:**
-- **Produced By**: Indicates which SDK APIs generate this code
-- **Reserved**: Error code is defined and exported, but nothing in `src/` currently produces it; reserved for future use or internal-only errors
-- ***Reserved (not produced; X returns Y instead)***: Code is defined but intentionally not used because the API returns a different error format
+| Error Code | Category | Produced By | Common Root Cause | Recommended Recovery Strategy |
+|---|---|---|---|---|
+| `CONNECTION_ERROR` | Transient | HTTP client, Auth API, Soroban RPC | Network partition, DNS resolution failure, unreachable node | Retry with exponential backoff; switch to fallback RPC URL |
+| `CONTRACT_ERROR` | Fatal | Contract invocation | Contract panicked, reverted, or hit host error during execution | Inspect error logs and contract state; do not blindly retry |
+| `INVALID_CONTRACT_CALL` | Fatal | SorobanSpec parser/encoder, contract builders | Method missing in spec, invalid argument count, wrong argument types | Verify contract ABI spec; fix method name or argument shape |
+| `VALIDATION_ERROR` | Fatal | EscrowBuilder, validation utils, client methods | Invalid Stellar address, negative amount, malformed hex/base64 | Check `error.field`; sanitize user input before resubmitting |
+| `UNAUTHORIZED` | Actionable | Wallet connectors, auth verification, disputes | User denied permissions, invalid token, or unauthorized caller | Prompt user to re-authenticate or connect authorized wallet |
+| `NOT_FOUND` | Informational | Escrow queries, resource lookups | Escrow ID, account, or requested state does not exist | Verify resource identifier; ensure transaction has confirmed |
+| `SIMULATION_ERROR` | Fatal / Actionable | TransactionPipeline.simulate, readContractState | Soroban simulation failed, contract trap, or restore required | If `needsRestore`, restore expired state; else fix preconditions |
+| `SIGNING_ERROR` | Actionable | Transaction signing, wallet adapters | Wallet popup cancelled, hardware wallet error, invalid keypair | Prompt user to unlock wallet or reconnect signing device |
+| `INVALID_CONFIG` | Fatal | TrustFlowClient / EscrowClient constructors | Missing `contractId`, invalid RPC URL, mismatched passphrase | Fix initialization options in code or environment variables |
+| `NOT_CONNECTED` | Actionable | Client methods before connect() | Operation attempted before client connected to wallet/node | Call `client.connect()` or specify an active account |
+| `BALANCE_FETCH_ERROR` | Transient / Actionable | TrustFlowClient.getBalance() | Horizon unreachable or account not yet funded on ledger | Fund account via Friendbot if new; retry if network failed |
+| `MULTISIG_ERROR` | Actionable | MultiSigEscrowClient | Multi-signature workflow state mismatch or corrupted data | Inspect multi-sig operation state and signature collection |
+| `MULTISIG_THRESHOLD_NOT_MET` | Actionable | MultiSigEscrowClient | Signatures collected is less than required signing threshold | Collect remaining authorized signatures before submission |
+| `MULTISIG_ALREADY_SIGNED` | Informational | MultiSigEscrowClient | Current signer has already submitted a signature | Skip redundant signing; proceed to next authorized signer |
+| `MULTISIG_EXPIRED` | Fatal | MultiSigEscrowClient | Multi-sig operation TTL or deadline expired before completion | Discard expired operation; initiate a fresh multi-sig proposal |
+| `MULTISIG_INVALID_SIGNER` | Fatal | MultiSig signature verification | Signer address is not an authorized participant in multi-sig group | Verify account belongs to authorized multi-sig participant list |
+| `MULTISIG_XDR_ERROR` | Fatal | MultiSig serialization | Malformed transaction envelope XDR or version mismatch | Verify XDR string encoding and matching network passphrase |
+| `ASSEMBLY_ERROR` | Transient / Fatal | TransactionPipeline.assemble | Sequence number lookup failed or builder rejected operation | Refresh account sequence from network and rebuild transaction |
+| `FEE_BUMP_ERROR` | Actionable | TransactionPipeline.buildFeeBump | Base fee lower than inner transaction fee, or invalid fee signer | Increase fee-bump budget; ensure fee source has sufficient funds |
+| `SUBMISSION_ERROR` | Transient / Fatal | TransactionPipeline.submit, Soroban RPC | Node mempool rejected tx (`txBAD_SEQ`, `txINSUFFICIENT_FEE`) | If `txBAD_SEQ`, refresh sequence; if fee error, bump fee |
+| `RETRY_EXHAUSTED` | Transient Limit | TransactionPipeline, retry decorators | All retry attempts spent without operation succeeding | Check upstream service status; consider increasing retry budget |
+| `NETWORK_ERROR` | Transient | Axios HTTP requests, RPC transports | Socket reset, gateway 502/503/504, dropped connection | Retry idempotent requests with capped exponential backoff |
+| `AUTH_ERROR` | Actionable | Challenge generation/verification, crypto | Random generator unavailable, invalid signature, expired token | Re-fetch fresh auth challenge and prompt user to re-sign |
+| `TIMEOUT` | Transient | HTTP calls, simulation deadline, confirmation poll | Request exceeded `timeoutMs` or tx did not land in time | Check transaction status by hash before resubmitting |
+| `CIRCUIT_BREAKER_OPEN` | Transient | CircuitBreaker utility | Consecutive failure threshold exceeded; requests fast-failed | Await cooldown period (half-open state) before sending requests |
+| `ACCOUNT_NOT_FOUND` | Actionable | AccountsManager, TrustFlowClient | Named account context not registered or account unfunded | Call `client.accounts.add()` or fund account with native asset |
+| `UNSUPPORTED_ENVIRONMENT` | Fatal | Environment detector | Missing WebCrypto or Node.js crypto primitives in runtime | Upgrade Node.js (>=20) or include WebCrypto polyfills |
+| `VERSION_MISMATCH` | Fatal | Version negotiator | Client SDK version is incompatible with backend API version | Update `@trustflow/sdk` or align backend deployment version |
+| `USER_REJECTED` | Actionable | Wallet connectors (Freighter, Albedo, xBull) | User dismissed wallet popup or declined connection/signing | Gracefully prompt user to re-open wallet when ready |
+| `STALE_CHALLENGE` | Transient / Actionable | Challenge validator | Auth challenge nonce expired before signature verification | Request a fresh challenge and verify immediately |
+
+---
+
+### Handling Transient vs Fatal Errors
+
+Use the error category to decide whether to retry automatically or alert the user:
+
+```typescript
+import { TrustFlowError, type TrustFlowErrorCode } from '@trustflow/sdk';
+
+const TRANSIENT_CODES: ReadonlySet<TrustFlowErrorCode> = new Set([
+  'CONNECTION_ERROR',
+  'NETWORK_ERROR',
+  'TIMEOUT',
+  'CIRCUIT_BREAKER_OPEN',
+  'RETRY_EXHAUSTED',
+]);
+
+async function executeWithRecovery<T>(operation: () => Promise<T>, maxRetries = 3): Promise<T> {
+  let attempt = 0;
+
+  while (true) {
+    try {
+      return await operation();
+    } catch (error) {
+      attempt++;
+
+      if (error instanceof TrustFlowError) {
+        // 1. Transient errors: Retry with exponential backoff and jitter
+        if (TRANSIENT_CODES.has(error.code) && attempt < maxRetries) {
+          const delayMs = Math.min(1000 * 2 ** (attempt - 1) + Math.random() * 200, 5000);
+          console.warn(`[${error.code}] Transient failure on attempt ${attempt}. Retrying in ${delayMs.toFixed(0)}ms...`);
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+
+        // 2. Actionable user errors: Guide user remediation
+        if (error.code === 'USER_REJECTED') {
+          throw new Error('Connection cancelled. Please approve the wallet request to continue.');
+        }
+        if (error.code === 'VALIDATION_ERROR') {
+          throw new Error(`Invalid form field "${error.field}": ${error.message}`);
+        }
+        if (error.code === 'UNAUTHORIZED') {
+          throw new Error('Session expired or permissions insufficient. Please log in again.');
+        }
+
+        // 3. Fatal errors: Stop execution and log diagnosis
+        console.error(`Fatal TrustFlowError [${error.code}]:`, error.message, error.cause);
+        throw error;
+      }
+
+      // Non-SDK unexpected errors
+      throw error;
+    }
+  }
+}
+```
+
+---
 
 ### Static Factory Methods
 
 Create pre-formatted errors:
 
-- `TrustFlowError.wrap(error: unknown, code?: TrustFlowErrorCode)` — Wrap any error
-- `TrustFlowError.notFound(resource: string)` — 'NOT_FOUND' code
-- `TrustFlowError.unauthorized(action: string)` — 'UNAUTHORIZED' code
-- `TrustFlowError.validation(field: string, message: string)` — 'VALIDATION_ERROR' code
-- `TrustFlowError.multiSigThresholdNotMet(collected: number, required: number)` — 'MULTISIG_THRESHOLD_NOT_MET' code
-- `TrustFlowError.multiSigExpired(operationId: string)` — 'MULTISIG_EXPIRED' code
-- `TrustFlowError.multiSigInvalidSigner(address: string)` — 'MULTISIG_INVALID_SIGNER' code
-- `TrustFlowError.multiSigXdrError(detail: string)` — 'MULTISIG_XDR_ERROR' code
-- `TrustFlowError.assemblyFailed(detail: string, cause?: unknown)` — 'ASSEMBLY_ERROR' code
-- `TrustFlowError.simulationFailed(detail: string, cause?: unknown)` — 'SIMULATION_ERROR' code
-- `TrustFlowError.feeBumpFailed(detail: string, cause?: unknown)` — 'FEE_BUMP_ERROR' code
-- `TrustFlowError.submissionFailed(detail: string, cause?: unknown)` — 'SUBMISSION_ERROR' code
-- `TrustFlowError.retryExhausted(stage: string, attempts: number, cause?: unknown)` — 'RETRY_EXHAUSTED' code
+- `TrustFlowError.wrap(error: unknown, code?: TrustFlowErrorCode)` — Wrap any unknown error into a typed `TrustFlowError`
+- `TrustFlowError.notFound(resource: string)` — 'NOT_FOUND' error
+- `TrustFlowError.unauthorized(action: string)` — 'UNAUTHORIZED' error
+- `TrustFlowError.validation(field: string, message: string, issues?: any[])` — 'VALIDATION_ERROR' with field name
+- `TrustFlowError.userRejected(detail?: string, cause?: unknown)` — 'USER_REJECTED' error
+- `TrustFlowError.versionMismatch(clientVersion: string, serverVersion: string, details?: string)` — 'VERSION_MISMATCH' error
+- `TrustFlowError.timedOut(timeoutMs: number, context?: string)` — 'TIMEOUT' error with context
+- `TrustFlowError.queueTimeout(timeoutMs: number)` — 'TIMEOUT' for transaction serialization queue
+- `TrustFlowError.accountNotFound(ref?: string)` — 'ACCOUNT_NOT_FOUND' error
+- `TrustFlowError.multiSigThresholdNotMet(collected: number, required: number)` — 'MULTISIG_THRESHOLD_NOT_MET' error
+- `TrustFlowError.multiSigExpired(operationId: string)` — 'MULTISIG_EXPIRED' error
+- `TrustFlowError.multiSigInvalidSigner(address: string)` — 'MULTISIG_INVALID_SIGNER' error
+- `TrustFlowError.multiSigXdrError(detail: string)` — 'MULTISIG_XDR_ERROR' error
+- `TrustFlowError.assemblyFailed(detail: string, cause?: unknown)` — 'ASSEMBLY_ERROR' error
+- `TrustFlowError.simulationFailed(detail: string, cause?: unknown)` — 'SIMULATION_ERROR' error
+- `TrustFlowError.feeBumpFailed(detail: string, cause?: unknown)` — 'FEE_BUMP_ERROR' error
+- `TrustFlowError.submissionFailed(detail: string, cause?: unknown)` — 'SUBMISSION_ERROR' error
+- `TrustFlowError.signingFailed(detail: string, cause?: unknown)` — 'SIGNING_ERROR' error
+- `TrustFlowError.retryExhausted(stage: string, attempts: number, cause?: unknown)` — 'RETRY_EXHAUSTED' error
+
 
 ## Testing Kit (`@trustflow/sdk/testing`)
 
