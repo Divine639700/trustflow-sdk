@@ -14,7 +14,7 @@ export type TrustFlowErrorCode =
   | 'MULTISIG_THRESHOLD_NOT_MET'
   | 'MULTISIG_ALREADY_SIGNED'
   | 'MULTISIG_EXPIRED'
-  | 'MULISIG_INVALID_SIGNER'
+  | 'MULITISIG_INVALID_SIGNER'
   | 'MULTISIG_XDR_ERROR'
   | 'ASSEMBLY_ERROR'
   | 'FEE_BUMP_ERROR'
@@ -114,7 +114,7 @@ export class TrustFlowError extends Error {
   }
 
   static multiSigXdrError(detail: string): TrustFlowError {
-    return new TrustFlowError(`Multi-sig XDR error: ${detail}`, 'MULISIG_XDR_ERROR');
+    return new TrustFlowError(`Multi-sig XDR error: ${detail}`, 'MULITISIG_XDR_ERROR');
   }
 
   static assemblyFailed(detail: string, cause?: unknown): TrustFlowError {
@@ -174,8 +174,8 @@ export class TrustFlowError extends Error {
 
   /**
    * The requested account context is not registered, or no account is active
-   * and the call needed one. Only raised when a caller explicitly names an
-   * account — with no account configured, the SDK stays in its original
+   * and the call needed one. Only raised when a caller explicitly names
+   * an account — with no account configured, the SDK stays in its original
    * single-account mode and never throws this.
    */
   static accountNotFound(ref?: string): TrustFlowError {
@@ -201,4 +201,53 @@ export class TrustFlowError extends Error {
       cause,
     );
   }
+}
+
+/**
+ * Normalised error for low-level network failures (e.g. `ECONNREFUSED`,
+ * `ENOTFOUND`) that never reached the server. Raised so that response
+ * error interceptors can observe and handle them uniformly.
+ */
+export class TrustFlowNetworkError extends TrustFlowError {
+  constructor(message: string, cause?: unknown) {
+    super(message, 'NETWORK_ERROR', cause);
+    this.name = 'TrustFlowNetworkError';
+  }
+
+  /**
+   * Normalises an arbitrary thrown value into a `TrustFlowNetworkError`.
+   * Extracts the underlying system error code (e.g. `ENOTFOUND`) when
+   * available so the message is actionable.
+   */
+  static fromError(error: unknown): TrustFlowNetworkError {
+    if (error instanceof TrustFlowNetworkError) {
+      return error;
+    }
+
+    const code = extractNetworkCode(error);
+    const baseMessage =
+      error instanceof Error && error.message
+        ? error.message
+        : String(error);
+    const message = code ? `Network request failed (${code}): ${baseMessage}` : `Network request failed: ${baseMessage}`;
+
+    return new TrustFlowNetworkError(message, error);
+  }
+}
+
+function extractNetworkCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') {
+    return undefined;
+  }
+
+  const candidate = error as { code?: unknown; cause?: unknown };
+  if (typeof candidate.code === 'string') {
+    return candidate.code;
+  }
+
+  if (candidate.cause && candidate.cause !== error) {
+    return extractNetworkCode(candidate.cause);
+  }
+
+  return undefined;
 }
