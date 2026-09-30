@@ -53,6 +53,37 @@ export interface PrepareOptions extends RetryPolicy {
   resourceFeeMultiplier?: number;
 }
 
+/** Fee estimation range in stroops. */
+export interface FeeRange {
+  /** Minimum fee needed for inclusion. */
+  min: string;
+  /** Recommended fee for reliable inclusion. */
+  recommended: string;
+  /** Maximum fee suggested for congested conditions. */
+  max: string;
+}
+
+/** Estimated fees and execution costs for a transaction. */
+export interface FeeEstimate {
+  /** Estimated resource fee in stroops (including headroom). */
+  resourceFee: string;
+  /** Inclusion fee range in stroops. */
+  inclusionFee: FeeRange;
+  /** Total fee range (resource fee + inclusion fee) in stroops. */
+  total: FeeRange;
+  /** Execution resource footprint from simulation. */
+  cost: {
+    cpuInsns: string;
+    memBytes: string;
+  };
+}
+
+/** Options for estimating transaction fees. */
+export interface EstimateFeeOptions extends PrepareOptions {
+  /** Headroom multiplier on inclusion fee. Defaults to 1.0. */
+  toleranceMultiplier?: number;
+}
+
 /** Configuration for escalating a submission into a fee-bumped transaction. */
 export interface FeeBumpOptions {
   /** Keypair of the account that will pay the bumped fee and sign the fee-bump envelope. */
