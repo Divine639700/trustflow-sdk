@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Wallet SEP-0007 transaction URIs (#379)
+
+- Issue #379: Added `generateSep7Uri` for mobile wallet deep links and QR payloads, with SEP-0007 parameter encoding and URI size validation.
+
 ### Horizon URL & Network Passphrase Overrides (#208)
 
 - Added `horizonUrl` and `networkPassphrase` overrides to `ClientConfig` and `ClientConfigSchema`, defaulting to network-derived values.
