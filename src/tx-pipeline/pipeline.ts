@@ -362,6 +362,35 @@ export class TransactionPipeline {
         return ok(outcome.data.response as rpc.Api.SimulateTransactionResponse);
       },
     );
+    const response = await withRetry(
+      () => this.server.simulateTransaction(tx),
+      options,
+      'simulate',
+      this.client.timeoutMs,
+    );
+    if (!response.ok) {
+      if (response.error.code === 'RETRY_EXHAUSTED') {
+        return fail(
+          TrustFlowError.simulationFailed(
+            'simulateTransaction request failed',
+            response.error.cause,
+          ),
+        );
+      }
+      return response;
+    }
+    if (rpc.Api.isSimulationError(response.data)) {
+      return fail(TrustFlowError.simulationFailed(response.data.error));
+    }
+    if (rpc.Api.isSimulationRestore(response.data)) {
+      return fail(
+        TrustFlowError.simulationFailed(
+          'simulation requires restore preamble',
+          response.data.restorePreamble,
+        ),
+      );
+    }
+    return ok(response.data);
   }
 
   /**
@@ -490,6 +519,36 @@ export class TransactionPipeline {
           'prepare',
           this.client.timeoutMs,
         );
+    const multiplier = options?.resourceFeeMultiplier ?? DEFAULT_RESOURCE_FEE_MULTIPLIER;
+
+    this.pipelineLogger.debug('Preparing transaction', { resourceFeeMultiplier: multiplier });
+    return withRetry(
+      async () => {
+        // Assemble from the *parsed* RPC response: `rpc.assembleTransaction`
+        // needs the full success shape (the Soroban data builder, its auth
+        // entries and the `_parsed` marker), which the shared
+        // `simulateTransaction` helper deliberately reduces to a decoded
+        // outcome. Rebuilding it here would drop the auth entries and make the
+        // SDK re-parse a response that only carries `results` when raw.
+        const simulation = await this.server.simulateTransaction(tx);
+        if (rpc.Api.isSimulationError(simulation)) {
+          throw TrustFlowError.simulationFailed(simulation.error);
+        }
+        if (rpc.Api.isSimulationRestore(simulation)) {
+          throw TrustFlowError.simulationFailed(
+            'simulation requires restore preamble',
+            simulation.restorePreamble,
+          );
+        }
+
+        // `assembleTransaction` reads the resource fee off `transactionData`
+        // itself (not `minResourceFee`), so the headroom must be written
+        // onto the SorobanTransactionData builder for it to take effect.
+        const paddedFee = Math.ceil(Number(simulation.minResourceFee) * multiplier).toString();
+        simulation.transactionData.setResourceFee(paddedFee);
+        this.pipelineLogger.debug('Transaction prepared', { paddedFee, minResourceFee: simulation.minResourceFee });
+
+        return rpc.assembleTransaction(tx, { ...simulation, minResourceFee: paddedFee }).build();
       },
     );
   }
