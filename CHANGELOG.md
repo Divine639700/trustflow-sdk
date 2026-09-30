@@ -5,6 +5,9 @@
 ### ⚠️ Breaking Changes
 
 - Issue #350: i128/u128 conversion helpers now throw `TrustFlowError` with code `INVALID_AMOUNT` instead of `RangeError` for invalid amounts. Decimal string bounds are checked before BigInt conversion; valid signed negatives remain supported. See [UPGRADING.md](docs/UPGRADING.md#i128u128-amount-validation-unreleased) for error-handler migration.
+### Pipeline queue release on simulation failures (#354)
+
+- Issue #354: `TransactionPipeline.run` now proves it releases its per-account queue slot when a transaction fails in the simulate step, so later runs for the same account proceed instead of hanging behind a stuck lane. Restored `simulate`/`prepare` to assemble from the parsed RPC response, which the shared simulation helper had reduced in a way that dropped the Soroban auth entries and broke every run after the first.
 
 ### Wallet SEP-0007 transaction URIs (#379)
 

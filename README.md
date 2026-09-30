@@ -109,6 +109,48 @@ console.log('Released! Transaction:', txHash);
 
 See [docs/QUICKSTART.md](./docs/QUICKSTART.md) for the full walkthrough including disputes, multi-sig, and pagination.
 
+### Air-Gapped Signing (Offline Cold Storage)
+
+Transactions can be built on a networked machine, signed on a host that never
+touches the network, and submitted from anywhere. Useful when the signing key
+lives on an HSM or an air-gapped host.
+
+```typescript
+import { buildUnsignedTransaction, broadcastSignedXDR, hasSignature } from 'trustflow-sdk';
+
+// 1. Build — no signature, no network call.
+const unsigned = buildUnsignedTransaction(
+  unsignedXdr,                 // base64 envelope from assembleTransaction
+  networkPassphrase,
+  fee,                         // e.g. '100'
+  sourceAccount,               // account that will sign
+  contractId,
+  'create_escrow',
+);
+hasSignature(unsigned.xdr); // false
+
+// 2. Sign on the air-gapped host, then bring the result back.
+const signedXdr = await coldStorageSigner.sign(unsigned.xdr);
+
+// 3. Broadcast.
+const submitted = await broadcastSignedXDR(signedXdr, horizonUrl);
+```
+
+`broadcastSignedXDR` checks the envelope carries at least one signature **before**
+making the request. An unsigned envelope would be rejected by Horizon anyway, but
+only after a round trip and with an error that is indistinguishable from a real
+ledger failure; failing locally makes it actionable.
+
+`TrustFlowEscrowClient` exposes the same build step for escrows:
+
+```typescript
+const built = client.buildUnsignedEscrowTransaction(params, sourceAccount);
+if (built.ok) {
+  const signedXdr = await coldStorageSigner.sign(built.data.xdr);
+  await broadcastSignedXDR(signedXdr, horizonUrl);
+}
+```
+
 ### Multi-Sig Escrow (M-of-N)
 
 Collect signatures from multiple approvers before a release is broadcast:
