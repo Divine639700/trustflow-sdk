@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Ledger hardware wallet (#362)
+
+- Issue #362: Added `LedgerWalletProvider` with WebHID connection, Stellar BIP-44 accounts, device-reviewed transaction signing, verified signatures, and mock-transport tests.
+
 ### Wallet SEP-0007 transaction URIs (#379)
 
 - Issue #379: Added `generateSep7Uri` for mobile wallet deep links and QR payloads, with SEP-0007 parameter encoding and URI size validation.
