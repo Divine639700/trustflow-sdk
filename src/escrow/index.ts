@@ -15,6 +15,13 @@ export type {
   DisputeOpenedPayload,
 } from './events';
 export { EscrowBuilder } from './builder';
+export type {
+  EscrowBuilderMilestone,
+  EscrowBuilderArbitration,
+  EscrowBuilderConfig,
+  EscrowBuilderJSON,
+  EscrowBuilderInvocationParams,
+} from './builder';
 export { EscrowMonitor } from './monitor';
 export type {
   EscrowMonitorOnError,
