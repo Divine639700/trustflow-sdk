@@ -52,6 +52,47 @@ console.log(`Balance: ${balance} XLM`);
 - `claim(escrowId, claimantAddress)` — beneficiary-side shortcut to withdraw already-cleared escrow funds
 - `getEscrow(id)` — read escrow state from contract
 - `getGigs(params)` — fetch paginated gigs via backend API with automatic retries for transient failures (`429`, `5xx`, network)
+- `buildUnsignedEscrowTransaction(params)` — build an **unsigned** `create_escrow` transaction and
+  return it as base64 XDR plus the network passphrase, for air-gapped signing. The sequence number
+  is fetched from the RPC (a cold-storage signer holds no live sequence) and simulation supplies
+  the auth entries and resource fee, so the envelope is submitable once signed. Returns
+  `SDKResult` like every other method — validation, account-fetch and simulation failures are
+  returned, not thrown.
+
+### Air-gapped (offline) signing
+
+For a signing machine with no network access, split the flow in two. `broadcastSignedXDR` and
+`inspectTransactionSignatures` are exported from `src/stellar/transaction.ts` (and re-exported
+from the package root alongside `submitTransaction`).
+
+```typescript
+// --- online machine ---
+const built = await client.buildUnsignedEscrowTransaction(params);
+if (!built.ok) throw new Error(built.error);
+fs.writeFileSync('escrow.xdr', built.data.xdr);
+
+// --- offline machine (no network) ---
+const signed = TransactionBuilder.fromXDR(fs.readFileSync('escrow.xdr', 'utf8'), networkPassphrase);
+fs.writeFileSync('escrow.signed.xdr', signed.sign(offlineKeypair).toXDR());
+
+// --- back on the online machine ---
+const report = inspectTransactionSignatures(signedXdr);
+if (!report.signed) throw new Error('signing did not take');
+
+const result = await broadcastSignedXDR(signedXdr, horizonUrl);
+```
+
+- `inspectTransactionSignatures(xdr)` — decodes an envelope and reports `signed`, `signatureCount`,
+  `signatureHints` and `feeBump`. It never throws for a well-formed envelope, and throws
+  `SIGNING_ERROR` for a value that is not a transaction at all, so a truncated payload is not
+  mistaken for an unsigned transaction.
+  `signatureHints` are hex **4-byte** hints (Stellar's signature-hint mechanism) and deliberately
+  do **not** identify a signer — a wallet that knows the candidate keys should match them itself.
+- `broadcastSignedXDR(signedXdr, horizonUrl, retry?, timeoutMs?)` — validates the envelope, then
+  submits it with exactly `submitTransaction`'s network, timeout and retry semantics, including
+  the deliberate no-retry rule for a `4xx` or a processed Horizon rejection.
+  An unsigned or malformed envelope throws `SIGNING_ERROR` **before any HTTP request**, so a
+  signing mistake costs no round trip and no fee.
 
 ## disputeEscrow (`src/escrow/dispute.ts`)
 - `disputeEscrow(client, { escrowId, caller, reason })` — raises a dispute directly against the

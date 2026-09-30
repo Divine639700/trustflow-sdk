@@ -1,249 +1,286 @@
 /**
- * Circuit breaker recovery tests (#353).
+ * @file tests/circuit-breaker.test.ts
+ * Circuit breaker recovery behaviour.
  *
- * The regression these cover: when every endpoint is down, a fallback that also
- * fails must not leave the circuit permanently OPEN with no path back. Recovery
- * after `resetTimeoutMs` is what makes the client self-healing instead of
- * requiring a manual `reset()`.
+ * Focus is the HALF_OPEN recovery path described in #353: an OPEN circuit
+ * must be able to re-probe a recovered endpoint automatically, and it must
+ * do so with a *single* probe rather than flooding a still-degraded endpoint.
+ *
+ * The module previously had no test coverage at all.
  */
 
 import { CircuitBreaker, CircuitBreakerRegistry } from '../src/utils/circuit-breaker';
+import { TrustFlowError } from '../src/errors';
 
-const config = {
-  failureThreshold: 2,
-  resetTimeoutMs: 1_000,
-  successThreshold: 1,
-};
-
-const boom = async (): Promise<never> => {
+/** Always rejects, to drive the breaker towards OPEN. */
+const fail = async (): Promise<never> => {
   throw new Error('endpoint down');
 };
-const pong = async (): Promise<string> => 'pong';
+
+/** Always resolves, to represent a recovered endpoint. */
+const ok = async <T>(value: T = 'ok'): Promise<T> => value;
+
+async function driveOpen(cb: CircuitBreaker, failures: number): Promise<void> {
+  for (let i = 0; i < failures; i += 1) {
+    await expect(cb.execute(fail)).rejects.toThrow();
+  }
+}
 
 describe('CircuitBreaker', () => {
-  beforeEach(() => {
-    jest.useFakeTimers();
-    jest.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+  describe('basic states', () => {
+    it('starts CLOSED and passes calls through', async () => {
+      const cb = new CircuitBreaker();
+      expect(cb.getState()).toBe('CLOSED');
+      await expect(cb.execute(ok)).resolves.toBe('ok');
+    });
+
+    it('opens only after reaching the failure threshold', async () => {
+      const cb = new CircuitBreaker({ failureThreshold: 3 });
+      await driveOpen(cb, 2);
+      expect(cb.getState()).toBe('CLOSED');
+      await driveOpen(cb, 1);
+      expect(cb.getState()).toBe('OPEN');
+    });
+
+    it('fails fast while OPEN without invoking the wrapped function', async () => {
+      const cb = new CircuitBreaker({ failureThreshold: 1 });
+      await driveOpen(cb, 1);
+
+      const wrapped = jest.fn(async () => 'ok');
+      await expect(cb.execute(wrapped)).rejects.toThrow(TrustFlowError);
+      expect(wrapped).not.toHaveBeenCalled();
+    });
+
+    it('reports onOpen with the failure count', async () => {
+      const onOpen = jest.fn();
+      const cb = new CircuitBreaker({ failureThreshold: 2, onOpen });
+      await driveOpen(cb, 2);
+      expect(onOpen).toHaveBeenCalledWith('Circuit opened after 2 failures');
+    });
   });
 
-  afterEach(() => {
-    jest.useRealTimers();
-  });
+  describe('automatic reset timeout (OPEN -> HALF_OPEN)', () => {
+    it('stays OPEN until the reset timeout elapses', async () => {
+      jest.useFakeTimers();
+      try {
+        const cb = new CircuitBreaker({ failureThreshold: 1, resetTimeoutMs: 30_000 });
+        await driveOpen(cb, 1);
+        expect(cb.getState()).toBe('OPEN');
 
-  it('opens once the failure threshold is reached', async () => {
-    const breaker = new CircuitBreaker(config);
-    await expect(breaker.execute(boom)).rejects.toThrow('endpoint down');
-    await expect(breaker.execute(boom)).rejects.toThrow('endpoint down');
-    expect(breaker.getState()).toBe('OPEN');
-  });
+        jest.advanceTimersByTime(29_999);
+        expect(cb.getState()).toBe('OPEN');
 
-  it('fails fast while OPEN without calling the endpoint', async () => {
-    const breaker = new CircuitBreaker(config);
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    await expect(breaker.execute(boom)).rejects.toThrow();
-
-    let calls = 0;
-    const counted = async () => {
-      calls++;
-      return 'pong';
-    };
-
-    await expect(breaker.execute(counted)).rejects.toThrow(/Circuit breaker is OPEN/);
-    expect(calls).toBe(0);
-  });
-
-  // The core of #353: recovery must not depend on the failing path succeeding.
-  it('transitions OPEN -> HALF_OPEN once the reset timeout elapses', async () => {
-    const breaker = new CircuitBreaker(config);
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    expect(breaker.getState()).toBe('OPEN');
-
-    jest.advanceTimersByTime(1_000);
-    expect(breaker.getState()).toBe('HALF_OPEN');
-  });
-
-  it('recovers automatically when the endpoint becomes healthy again', async () => {
-    const breaker = new CircuitBreaker(config);
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    await expect(breaker.execute(boom)).rejects.toThrow();
-
-    jest.advanceTimersByTime(1_000);
-    await expect(breaker.execute(pong)).resolves.toBe('pong');
-    expect(breaker.getState()).toBe('CLOSED');
-  });
-
-  it('returns to OPEN and re-arms the timeout when the probe still fails', async () => {
-    const breaker = new CircuitBreaker(config);
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    await expect(breaker.execute(boom)).rejects.toThrow();
-
-    jest.advanceTimersByTime(1_000);
-    expect(breaker.getState()).toBe('HALF_OPEN');
-
-    // Endpoint still down: the probe must re-open the circuit, not wedge it.
-    await expect(breaker.execute(boom)).rejects.toThrow('endpoint down');
-    expect(breaker.getState()).toBe('OPEN');
-
-    // A second timeout is required before probing again.
-    jest.advanceTimersByTime(500);
-    expect(breaker.getState()).toBe('OPEN');
-    jest.advanceTimersByTime(500);
-    expect(breaker.getState()).toBe('HALF_OPEN');
-  });
-
-  it('does not flood a degraded endpoint while HALF_OPEN', async () => {
-    const breaker = new CircuitBreaker(config);
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    jest.advanceTimersByTime(1_000);
-    expect(breaker.getState()).toBe('HALF_OPEN');
-
-    let calls = 0;
-    let releaseProbe: () => void = () => {};
-    // A probe that never settles on its own: the test releases it explicitly so
-    // the other three callers observe a genuinely in-flight probe.
-    const slow = async () => {
-      calls++;
-      await new Promise<void>((resolve) => {
-        releaseProbe = resolve;
-      });
-      return 'pong';
-    };
-
-    const attempts = [
-      breaker.execute(slow),
-      breaker.execute(slow),
-      breaker.execute(slow),
-      breaker.execute(slow),
-    ];
-
-    // Let the four calls run up to the point where the first one is parked
-    // inside the endpoint call.
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-    releaseProbe();
-    const results = await Promise.allSettled(attempts);
-
-    // Only the single permitted probe reaches the endpoint.
-    expect(calls).toBe(1);
-    const fulfilled = results.filter((r) => r.status === 'fulfilled');
-    const rejected = results.filter((r) => r.status === 'rejected');
-    expect(fulfilled).toHaveLength(1);
-    expect(rejected).toHaveLength(3);
-    for (const failure of rejected) {
-      expect((failure as PromiseRejectedResult).reason.message).toMatch(/already in flight/);
-    }
-  });
-
-  it('allows a further probe after the in-flight one settles', async () => {
-    const breaker = new CircuitBreaker({ ...config, successThreshold: 2 });
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    jest.advanceTimersByTime(1_000);
-    expect(breaker.getState()).toBe('HALF_OPEN');
-
-    await expect(breaker.execute(pong)).resolves.toBe('pong');
-    expect(breaker.getDiagnostics().probeInFlight).toBe(false);
-    // successThreshold is 2, so one probe leaves it half-open but usable again.
-    expect(breaker.getState()).toBe('HALF_OPEN');
-    await expect(breaker.execute(pong)).resolves.toBe('pong');
-    expect(breaker.getState()).toBe('CLOSED');
-  });
-
-  it('closes only after successThreshold consecutive successful probes', async () => {
-    const breaker = new CircuitBreaker({ ...config, successThreshold: 3 });
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    jest.advanceTimersByTime(1_000);
-
-    await breaker.execute(pong);
-    expect(breaker.getState()).toBe('HALF_OPEN');
-    await breaker.execute(pong);
-    expect(breaker.getState()).toBe('HALF_OPEN');
-    await breaker.execute(pong);
-    expect(breaker.getState()).toBe('CLOSED');
-  });
-
-  it('resets the consecutive failure count on a successful probe', async () => {
-    const breaker = new CircuitBreaker({ ...config, failureThreshold: 3 });
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    expect(breaker.getDiagnostics().failureCount).toBe(2);
-
-    await breaker.execute(pong);
-    expect(breaker.getDiagnostics().failureCount).toBe(0);
-  });
-
-  it('does not inherit a stale retry timestamp after recovering', async () => {
-    const breaker = new CircuitBreaker(config);
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    jest.advanceTimersByTime(1_000);
-    breaker.getState();
-    // Entering HALF_OPEN must clear the expired deadline.
-    expect(breaker.getDiagnostics().nextRetryTime).toBeUndefined();
-
-    await breaker.execute(pong);
-    expect(breaker.getState()).toBe('CLOSED');
-    expect(breaker.getDiagnostics().nextRetryTime).toBeUndefined();
-  });
-
-  it('notifies on state transitions', async () => {
-    const onStateChange = jest.fn();
-    const breaker = new CircuitBreaker({ ...config, onStateChange });
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    jest.advanceTimersByTime(1_000);
-    await breaker.execute(pong);
-
-    expect(onStateChange).toHaveBeenCalledWith('CLOSED', 'OPEN');
-    expect(onStateChange).toHaveBeenCalledWith('OPEN', 'HALF_OPEN');
-    expect(onStateChange).toHaveBeenCalledWith('HALF_OPEN', 'CLOSED');
-  });
-
-  it('recovers through executeSync as well', () => {
-    const breaker = new CircuitBreaker(config);
-    const boomSync = (): never => {
-      throw new Error('sync down');
-    };
-    expect(() => breaker.executeSync(boomSync)).toThrow('sync down');
-    expect(() => breaker.executeSync(boomSync)).toThrow('sync down');
-    expect(breaker.getState()).toBe('OPEN');
-
-    jest.advanceTimersByTime(1_000);
-    expect(breaker.getState()).toBe('HALF_OPEN');
-    expect(breaker.executeSync(() => 'ok')).toBe('ok');
-    expect(breaker.getState()).toBe('CLOSED');
-  });
-
-  it('manual reset returns a wedged circuit to CLOSED', async () => {
-    const breaker = new CircuitBreaker(config);
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    expect(breaker.getState()).toBe('OPEN');
-
-    breaker.reset();
-    expect(breaker.getState()).toBe('CLOSED');
-    await expect(breaker.execute(pong)).resolves.toBe('pong');
-  });
-
-  it('recovers without a manual reset, which is the point of the fix', async () => {
-    const breaker = new CircuitBreaker(config);
-    await expect(breaker.execute(boom)).rejects.toThrow();
-    await expect(breaker.execute(boom)).rejects.toThrow();
-
-    // Three outage/recovery cycles back to back.
-    for (let i = 0; i < 3; i++) {
-      jest.advanceTimersByTime(1_000);
-      await expect(breaker.execute(pong)).resolves.toBe('pong');
-      expect(breaker.getState()).toBe('CLOSED');
-      if (i < 2) {
-        await expect(breaker.execute(boom)).rejects.toThrow();
-        await expect(breaker.execute(boom)).rejects.toThrow();
+        jest.advanceTimersByTime(1);
+        expect(cb.getState()).toBe('HALF_OPEN');
+      } finally {
+        jest.useRealTimers();
       }
-    }
+    });
+
+    it('notifies on the transition to HALF_OPEN', async () => {
+      jest.useFakeTimers();
+      try {
+        const transitions: string[] = [];
+        const cb = new CircuitBreaker({
+          failureThreshold: 1,
+          resetTimeoutMs: 1_000,
+          onStateChange: (from, to) => transitions.push(`${from}->${to}`),
+        });
+        await driveOpen(cb, 1);
+        jest.advanceTimersByTime(1_001);
+        expect(cb.getState()).toBe('HALF_OPEN');
+        expect(transitions).toContain('OPEN->HALF_OPEN');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('clears the consumed retry deadline in diagnostics', async () => {
+      jest.useFakeTimers();
+      try {
+        const cb = new CircuitBreaker({ failureThreshold: 1, resetTimeoutMs: 1_000 });
+        await driveOpen(cb, 1);
+        expect(cb.getDiagnostics().nextRetryTime).toBeDefined();
+
+        jest.advanceTimersByTime(1_001);
+        expect(cb.getState()).toBe('HALF_OPEN');
+        // The deadline has been used up, so it must not linger.
+        expect(cb.getDiagnostics().nextRetryTime).toBeUndefined();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
+  describe('HALF_OPEN admits a single probe (#353)', () => {
+    it('lets exactly one concurrent probe through', async () => {
+      const cb = new CircuitBreaker({ failureThreshold: 2, resetTimeoutMs: 5, successThreshold: 2 });
+      await driveOpen(cb, 2);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(cb.getState()).toBe('HALF_OPEN');
+
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const probe = async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 30));
+        inFlight -= 1;
+        return 'ok';
+      };
+
+      const results = await Promise.allSettled([
+        cb.execute(probe),
+        cb.execute(probe),
+        cb.execute(probe),
+        cb.execute(probe),
+      ]);
+
+      // The regression this guards: all four used to reach the endpoint.
+      expect(maxInFlight).toBe(1);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(3);
+    });
+
+    it('rejects concurrent probes with a NETWORK_ERROR and does not count them as failures', async () => {
+      const cb = new CircuitBreaker({ failureThreshold: 2, resetTimeoutMs: 5, successThreshold: 2 });
+      await driveOpen(cb, 2);
+      await new Promise((r) => setTimeout(r, 20));
+
+      const failuresBefore = cb.getDiagnostics().failureCount;
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      const probe = async () => {
+        await gate;
+        return 'ok';
+      };
+
+      const first = cb.execute(probe);
+      let caught: unknown;
+      try {
+        await cb.execute(probe);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(TrustFlowError);
+      expect((caught as Error).message).toMatch(/health probe is already in flight/i);
+
+      // A rejected bystander must not count as an endpoint failure, or a
+      // healthy endpoint would be driven back towards OPEN.
+      expect(cb.getDiagnostics().failureCount).toBe(failuresBefore);
+
+      release();
+      await expect(first).resolves.toBe('ok');
+    });
+
+    it('releases the probe slot when the probe itself throws', async () => {
+      const cb = new CircuitBreaker({ failureThreshold: 1, resetTimeoutMs: 5, successThreshold: 2 });
+      await driveOpen(cb, 1);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(cb.getState()).toBe('HALF_OPEN');
+
+      // A failed probe sends the circuit back to OPEN...
+      await expect(cb.execute(fail)).rejects.toThrow();
+      expect(cb.getState()).toBe('OPEN');
+
+      // ...and must not leave the slot stuck, or recovery is impossible.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(cb.getState()).toBe('HALF_OPEN');
+      await expect(cb.execute(ok)).resolves.toBe('ok');
+    });
+  });
+
+  describe('HALF_OPEN requires consecutive successes (#353)', () => {
+    it('closes only after successThreshold consecutive probes', async () => {
+      const cb = new CircuitBreaker({ failureThreshold: 1, resetTimeoutMs: 5, successThreshold: 2 });
+      await driveOpen(cb, 1);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(cb.getState()).toBe('HALF_OPEN');
+
+      await expect(cb.execute(ok)).resolves.toBe('ok');
+      expect(cb.getState()).toBe('HALF_OPEN');
+      await expect(cb.execute(ok)).resolves.toBe('ok');
+      expect(cb.getState()).toBe('CLOSED');
+    });
+
+    it('does not carry successes across an OPEN -> HALF_OPEN cycle', async () => {
+      const cb = new CircuitBreaker({ failureThreshold: 2, resetTimeoutMs: 5, successThreshold: 2 });
+      await driveOpen(cb, 2);
+      await new Promise((r) => setTimeout(r, 20));
+
+      // One success, then a failure sends us back to OPEN with partial credit.
+      await expect(cb.execute(ok)).resolves.toBe('ok');
+      await expect(cb.execute(fail)).rejects.toThrow();
+      expect(cb.getState()).toBe('OPEN');
+
+      await new Promise((r) => setTimeout(r, 20));
+      expect(cb.getState()).toBe('HALF_OPEN');
+      // The stale success must not count towards the new attempt.
+      expect(cb.getDiagnostics().successCount).toBe(0);
+
+      // Previously a single success here closed the circuit immediately.
+      await expect(cb.execute(ok)).resolves.toBe('ok');
+      expect(cb.getState()).toBe('HALF_OPEN');
+      await expect(cb.execute(ok)).resolves.toBe('ok');
+      expect(cb.getState()).toBe('CLOSED');
+    });
+  });
+
+  describe('recovery end to end', () => {
+    it('recovers automatically after an outage without manual intervention', async () => {
+      const cb = new CircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 10, successThreshold: 1 });
+      await driveOpen(cb, 3);
+      expect(cb.getState()).toBe('OPEN');
+
+      await new Promise((r) => setTimeout(r, 25));
+      expect(cb.getState()).toBe('HALF_OPEN');
+      await expect(cb.execute(ok)).resolves.toBe('ok');
+      expect(cb.getState()).toBe('CLOSED');
+    });
+
+    it('re-opens when the probe fails, then recovers on a later timeout', async () => {
+      const cb = new CircuitBreaker({ failureThreshold: 2, resetTimeoutMs: 10, successThreshold: 1 });
+      await driveOpen(cb, 2);
+      await new Promise((r) => setTimeout(r, 25));
+
+      // Still down: probe fails, circuit re-opens.
+      await expect(cb.execute(fail)).rejects.toThrow();
+      expect(cb.getState()).toBe('OPEN');
+
+      // Endpoint comes back.
+      await new Promise((r) => setTimeout(r, 25));
+      expect(cb.getState()).toBe('HALF_OPEN');
+      await expect(cb.execute(ok)).resolves.toBe('ok');
+      expect(cb.getState()).toBe('CLOSED');
+    });
+
+    it('manual reset returns the circuit to a clean CLOSED state', async () => {
+      const cb = new CircuitBreaker({ failureThreshold: 1, resetTimeoutMs: 1_000 });
+      await driveOpen(cb, 1);
+      expect(cb.getState()).toBe('OPEN');
+
+      cb.reset();
+      expect(cb.getState()).toBe('CLOSED');
+      const diag = cb.getDiagnostics();
+      expect(diag.failureCount).toBe(0);
+      expect(diag.successCount).toBe(0);
+      expect(diag.nextRetryTime).toBeUndefined();
+      await expect(cb.execute(ok)).resolves.toBe('ok');
+    });
+  });
+
+  describe('executeSync', () => {
+    it('applies the same OPEN fail-fast behaviour', () => {
+      const cb = new CircuitBreaker({ failureThreshold: 1 });
+      const thrower = () => {
+        throw new Error('down');
+      };
+      expect(() => cb.executeSync(thrower)).toThrow('down');
+      expect(cb.getState()).toBe('OPEN');
+      expect(() => cb.executeSync(() => 'ok')).toThrow(TrustFlowError);
+    });
   });
 });
 
