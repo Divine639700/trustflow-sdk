@@ -1,6 +1,13 @@
 export { TrustFlowEscrowClient } from './client';
 export type { GetGigsOptions, TrustFlowEscrowClientOptions } from './client';
 export { EscrowBuilder } from './builder';
+export type {
+  EscrowBuilderMilestone,
+  EscrowBuilderArbitration,
+  EscrowBuilderConfig,
+  EscrowBuilderJSON,
+  EscrowBuilderInvocationParams,
+} from './builder';
 export { EscrowMonitor } from './monitor';
 export type {
   EscrowMonitorOnError,
