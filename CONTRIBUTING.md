@@ -104,6 +104,9 @@ Thank you for contributing to TrustFlow SDK! This guide will help you set up you
      ```
    - Keep entries organized by feature area (Escrow, Auth, Wallet, etc.)
    - Format: `- Issue #[number]: [Description]`
+   - Breaking changes go under `### ⚠️ Breaking Changes` and need a migration section in
+     `docs/UPGRADING.md`; deprecate with a `@deprecated` JSDoc tag before removing. See
+     [docs/VERSIONING.md](docs/VERSIONING.md) for what counts as breaking.
 
 ### Committing
 
