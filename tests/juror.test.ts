@@ -1,5 +1,6 @@
 import { Keypair } from '@stellar/stellar-sdk';
-import { JurorClient } from '../src/juror/client';
+import { JurorClient, createVoteCommitment, revealVote } from '../src/juror/client';
+
 import type { ContractConfig } from '../src/types/contract';
 
 const JUROR_ADDRESS = Keypair.random().publicKey();
@@ -112,6 +113,102 @@ describe('JurorClient.vote', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toMatch(/ciphertext/);
+    }
+  });
+});
+
+describe('commit-reveal voting helpers (Issue #373)', () => {
+  it('constructs commitment matching contract sha256(vote_byte ++ 32_byte_salt) layout for true', () => {
+    const zeroSalt = new Uint8Array(32);
+    const commitment = createVoteCommitment(true, zeroSalt);
+
+    // sha256(0x01 ++ 32 bytes of 0x00)
+    expect(commitment.commitmentHex).toBe(
+      '1a7dfdeaffeedac489287e85be5e9c049a2ff6470f55cf30260f55395ac1b159',
+    );
+    expect(commitment.voteForDepositor).toBe(true);
+    expect(commitment.salt).toEqual(zeroSalt);
+    expect(commitment.commitment.length).toBe(32);
+    expect(Buffer.from(commitment.ciphertext, 'base64')).toEqual(
+      Buffer.from(commitment.commitment),
+    );
+  });
+
+  it('constructs commitment matching contract sha256(vote_byte ++ 32_byte_salt) layout for false', () => {
+    const zeroSalt = new Uint8Array(32);
+    const commitment = createVoteCommitment(false, zeroSalt);
+
+    // Expected sha256(0x00 ++ 32 bytes of 0x00)
+    const expectedHash = require('crypto')
+      .createHash('sha256')
+      .update(Buffer.concat([Buffer.from([0]), Buffer.alloc(32, 0)]))
+      .digest('hex');
+
+    expect(commitment.commitmentHex).toBe(expectedHash);
+    expect(commitment.voteForDepositor).toBe(false);
+  });
+
+  it('automatically generates 32 cryptographically secure random bytes if salt is omitted', () => {
+    const commitment1 = createVoteCommitment(true);
+    const commitment2 = createVoteCommitment(true);
+
+    expect(commitment1.salt.length).toBe(32);
+    expect(commitment2.salt.length).toBe(32);
+    // Two random salts must not be identical
+    expect(commitment1.saltHex).not.toBe(commitment2.saltHex);
+    expect(commitment1.commitmentHex).not.toBe(commitment2.commitmentHex);
+  });
+
+  it('rejects salt that is not exactly 32 bytes', () => {
+    expect(() => createVoteCommitment(true, new Uint8Array(31))).toThrow(
+      /Salt must be exactly 32 bytes/,
+    );
+    expect(() => createVoteCommitment(true, new Uint8Array(33))).toThrow(
+      /Salt must be exactly 32 bytes/,
+    );
+    expect(() => createVoteCommitment(true, new Uint8Array(0))).toThrow(
+      /Salt must be exactly 32 bytes/,
+    );
+  });
+
+  it('reveals vote matching the created commitment', () => {
+    const commitment = createVoteCommitment(true);
+    const reveal = revealVote(true, commitment.salt);
+
+    expect(reveal.voteForDepositor).toBe(true);
+    expect(reveal.voteByte).toBe(1);
+    expect(reveal.salt).toEqual(commitment.salt);
+    expect(reveal.commitmentHex).toBe(commitment.commitmentHex);
+    expect(reveal.commitment).toEqual(commitment.commitment);
+  });
+
+  it('stores salts locally on JurorClient instance and allows retrieval', () => {
+    const jurors = new JurorClient(CONFIG);
+    const commitment = jurors.createVoteCommitment(false);
+
+    const storedSalt = jurors.getStoredSalt(commitment.commitmentHex);
+    expect(storedSalt).toEqual(commitment.salt);
+
+    const storedSaltFromBytes = jurors.getStoredSalt(commitment.commitment);
+    expect(storedSaltFromBytes).toEqual(commitment.salt);
+
+    jurors.clearStoredSalts();
+    expect(jurors.getStoredSalt(commitment.commitmentHex)).toBeUndefined();
+  });
+
+  it('can be used directly to cast an encrypted vote with JurorClient', async () => {
+    const jurors = new JurorClient(CONFIG);
+    const commitment = jurors.createVoteCommitment(true);
+
+    const result = await jurors.vote({
+      disputeId: 'dsp-1',
+      jurorAddress: JUROR_ADDRESS,
+      vote: { encrypted: true, ciphertext: commitment.ciphertext },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.encrypted).toBe(true);
     }
   });
 });

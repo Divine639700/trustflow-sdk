@@ -40,3 +40,39 @@ export interface CastVoteResult {
 }
 
 export type CastVoteSDKResult = SDKResult<CastVoteResult>;
+
+/**
+ * Result of creating a vote commitment.
+ */
+export interface VoteCommitment {
+  /** 32-byte SHA-256 commitment hash matching contract sha256(vote_byte ++ 32_byte_salt) */
+  commitment: Uint8Array;
+  /** 32-byte cryptographically secure secret salt */
+  salt: Uint8Array;
+  /** Hex-encoded string of the 32-byte commitment hash */
+  commitmentHex: string;
+  /** Hex-encoded string of the 32-byte salt */
+  saltHex: string;
+  /** Base64-encoded commitment string, suitable for EncryptedVote.ciphertext */
+  ciphertext: string;
+  /** The vote choice: true if voting for depositor, false if voting for beneficiary */
+  voteForDepositor: boolean;
+}
+
+/**
+ * Result of constructing or verifying a reveal vote payload.
+ */
+export interface RevealVoteResult {
+  /** The vote choice: true if voting for depositor, false if voting for beneficiary */
+  voteForDepositor: boolean;
+  /** Numerical vote byte: 1 for depositor, 0 for beneficiary */
+  voteByte: number;
+  /** The 32-byte secret salt */
+  salt: Uint8Array;
+  /** Hex-encoded string of the 32-byte salt */
+  saltHex: string;
+  /** The reconstructed 32-byte commitment hash */
+  commitment: Uint8Array;
+  /** Hex-encoded string of the reconstructed commitment hash */
+  commitmentHex: string;
+}
