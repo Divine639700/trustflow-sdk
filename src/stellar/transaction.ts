@@ -1,5 +1,6 @@
 import { TransactionBuilder as SdkTransactionBuilder } from '@stellar/stellar-sdk';
 
+import { TransactionBuilder } from '@stellar/stellar-sdk';
 import { TrustFlowError } from '../errors';
 import { withTransientRetry } from '../utils/node-retry';
 import { markTransient } from '../utils/transient';
@@ -62,6 +63,162 @@ export interface HorizonSubmissionErrorDetail {
   transactionCode?: string;
   /** Per-operation result codes, e.g. `op_underfunded`. */
   operationCodes: string[];
+}
+
+/**
+ * What {@link inspectTransactionSignatures} found in a base64 envelope.
+ *
+ * `signatureCount` is the number of signatures present across all transaction
+ * signatures plus fee-bump inner signatures, since a fee-bump wraps a signed
+ * transaction and a caller may reasonably pass either half.
+ */
+export interface TransactionSignatureReport {
+  /** Number of signature entries found in the envelope. */
+  signatureCount: number;
+  /** `true` when the envelope carries at least one signature. */
+  signed: boolean;
+  /**
+   * Hex-encoded 4-byte signature **hints**, one per signature, in envelope
+   * order.
+   *
+   * A hint is only the first four bytes of a signer's ed25519 public key — it
+   * is not the key itself and cannot be turned into an account id. Stellar
+   * includes it so a wallet that already knows the candidate signers can match
+   * signatures to them cheaply. Callers that need full public keys must supply
+   * the candidate set themselves; a hint alone identifies at most one signer
+   * per 2^32 keys.
+   */
+  signatureHints: string[];
+  /** `true` when the envelope is a fee-bump transaction. */
+  feeBump: boolean;
+}
+
+/**
+ * Decodes a base64 transaction envelope and reports its signatures without
+ * submitting it.
+ *
+ * This is what lets {@link broadcastSignedXDR} reject an envelope that is still
+ * unsigned *before* it reaches the network: submitting an unsigned envelope
+ * costs a round trip and, on a funded account, a fee, and Horizon answers with a
+ * generic `tx_missing_signature` that is easy to misread.
+ *
+ * A non-envelope string throws `INVALID_SIGNATURE` rather than reporting zero
+ * signatures, so a truncated or mis-encoded payload is not silently mistaken
+ * for an unsigned transaction.
+ *
+ * @param base64Xdr - Base64 transaction envelope, as produced by `toXDR()`
+ * @throws {TrustFlowError} `SIGNING_ERROR` if the value is not a decodable
+ *   transaction envelope
+ */
+export function inspectTransactionSignatures(base64Xdr: string): TransactionSignatureReport {
+  // Structural view of the two envelope classes `TransactionBuilder.fromXDR`
+  // can return. The SDK's generics do not narrow on `instanceof`, so the shape
+  // we rely on is declared here. Note the inner-transaction accessor differs
+  // across stellar-base releases (a public `innerTx()` getter in some, the
+  // `_innerTransaction` field in others), so both are probed rather than
+  // hardcoding one.
+  interface SignatureCarrier {
+    /** Signature list. A plain array property on both envelope classes. */
+    signatures: { hint(): Buffer | null }[];
+    /** Present only on a fee-bump envelope. */
+    innerTx?: SignatureCarrier;
+    /** Field name used by stellar-base releases without an `innerTx()` getter. */
+    _innerTransaction?: SignatureCarrier;
+  }
+
+  let decoded: SignatureCarrier;
+  try {
+    decoded = TransactionBuilder.fromXDR(
+      base64Xdr,
+      'placeholder',
+    ) as unknown as SignatureCarrier;
+  } catch (e) {
+    throw new TrustFlowError(
+      'Value is not a valid base64 transaction envelope',
+      'SIGNING_ERROR',
+      e,
+    );
+  }
+
+  // A fee bump is only broadcastable when *both* halves are signed: the bump
+  // needs a signature from the fee payer, and the wrapped transaction needs one
+  // (or more) from its original signers.
+  const inner =
+    typeof decoded.innerTx === 'function'
+      ? (decoded.innerTx as unknown as () => SignatureCarrier)()
+      : decoded._innerTransaction;
+  const feeBump = inner !== undefined;
+  const signatures = feeBump
+    ? [...decoded.signatures, ...(inner as SignatureCarrier).signatures]
+    : [...decoded.signatures];
+
+  // A hint is a 4-byte prefix, not a full public key, so it is reported as
+  // hex rather than being encoded into a misleading account id.
+  const signatureHints: string[] = [];
+  for (const sig of signatures) {
+    const hint = sig.hint();
+    if (!hint || hint.length === 0) continue;
+    signatureHints.push(Buffer.from(hint).toString('hex'));
+  }
+
+  return {
+    signatureCount: signatures.length,
+    signed: signatures.length > 0,
+    signatureHints,
+    feeBump,
+  };
+}
+
+/**
+ * Broadcasts an already-signed base64 transaction envelope to Horizon.
+ *
+ * Complements {@link submitTransaction} for the air-gapped / cold-storage
+ * workflow in #365: a transaction is built unsigned, exported, signed on an
+ * offline machine, and later handed to this method. The signature check runs
+ * first so an unsigned or malformed envelope fails locally, without spending a
+ * round trip or a fee.
+ *
+ * Network, timeout and retry semantics are exactly {@link submitTransaction}'s,
+ * including the deliberate no-retry rule for a `4xx` or a processed Horizon
+ * rejection: replaying the same envelope would only earn the same verdict.
+ *
+ * @param signedXdr - Base64 **signed** transaction envelope
+ * @param horizonUrl - Horizon base URL (with or without a trailing slash)
+ * @param retry - Optional retry budget
+ * @param timeoutMs - Optional request timeout in milliseconds
+ * @returns The submission result on success
+ * @throws {TrustFlowError} `INVALID_SIGNATURE` when the envelope is not a valid
+ *   transaction, or carries no signature at all
+ *
+ * @example
+ * ```typescript
+ * // signed offline, on a machine with no network access
+ * const signed = fs.readFileSync('escrow.signed.xdr', 'utf8');
+ * const result = await broadcastSignedXDR(signed, horizonUrl);
+ * console.log('submitted:', result.hash);
+ * ```
+ */
+export async function broadcastSignedXDR(
+  signedXdr: string,
+  horizonUrl: string,
+  retry?: ApiRetryConfig,
+  timeoutMs?: number,
+): Promise<SubmittedTx> {
+  if (typeof signedXdr !== 'string' || signedXdr.trim() === '') {
+    throw new TrustFlowError('Signed XDR is required', 'SIGNING_ERROR');
+  }
+
+  const report = inspectTransactionSignatures(signedXdr);
+  if (!report.signed) {
+    throw new TrustFlowError(
+      report.feeBump
+        ? 'Transaction envelope is a fee bump with no signatures; it cannot be broadcast'
+        : 'Transaction envelope carries no signatures; sign it before broadcasting',
+      'SIGNING_ERROR',
+    );
+  }
+
+  return submitTransaction(signedXdr, horizonUrl, retry, timeoutMs);
 }
 
 interface HorizonResponseBody {

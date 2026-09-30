@@ -25,6 +25,8 @@ import {
 } from './utils/environment';
 import { clearSession, loadSession, saveSession, type Session } from './auth/session';
 import type { ApiRetryConfig } from './utils/http';
+import { trace, type Tracer, type TracerProvider } from '@opentelemetry/api';
+import { getSdkTracer, installTraceContextInterceptor } from './utils/tracing';
 
 /** Default TTL for opt-in Horizon balance caching. */
 export const DEFAULT_BALANCE_CACHE_TTL_MS = 5_000;
@@ -108,6 +110,9 @@ export class TrustFlowClient {
    * the backend and IPFS HTTP helpers, so one block configures the whole client.
    */
   readonly retryConfig?: ApiRetryConfig;
+  /** OpenTelemetry provider used for all SDK spans. */
+  readonly tracerProvider: TracerProvider;
+  private readonly tracer: Tracer;
 
   /**
    * Creates a new TrustFlow client instance.
@@ -169,6 +174,8 @@ export class TrustFlowClient {
     this.apiVersion = config.apiVersion ?? DEFAULT_API_VERSION;
     this.timeoutMs = config.timeoutMs;
     this.retryConfig = config.ipfs ? { ...config.retry, ...config.ipfs.retry } : config.retry;
+    this.tracerProvider = config.tracerProvider ?? trace.getTracerProvider();
+    this.tracer = getSdkTracer(this.tracerProvider);
     this.storage = new IPFSStorage(config.ipfs);
     this.balanceCache = config.balanceCache
       ? new SimpleCache(config.balanceCache.ttlMs ?? DEFAULT_BALANCE_CACHE_TTL_MS)
@@ -176,6 +183,14 @@ export class TrustFlowClient {
 
     this.server = config.horizonServer ?? new Horizon.Server(this.horizonUrl);
     this.sorobanServer = config.rpcServer;
+    installTraceContextInterceptor(
+      this.server.httpClient as unknown as import('axios').AxiosInstance,
+    );
+    if (this.sorobanServer) {
+      installTraceContextInterceptor(
+        this.sorobanServer.httpClient as unknown as import('axios').AxiosInstance,
+      );
+    }
     this.logger = logger;
     this.accounts = new AccountManager();
     for (const account of config.accounts ?? []) {
@@ -379,7 +394,10 @@ export class TrustFlowClient {
    * ```
    */
   async connect(): Promise<void> {
-    this.logger.debug('Connecting to Stellar network', { network: this.network, rpcUrl: this.rpcUrl });
+    this.logger.debug('Connecting to Stellar network', {
+      network: this.network,
+      rpcUrl: this.rpcUrl,
+    });
     try {
       // Test connection by fetching ledger info
       await withTransientRetry(
@@ -409,7 +427,11 @@ export class TrustFlowClient {
     return this._connected;
   }
 
-  async verifyApiCompatibility(): Promise<{ compatible: boolean; serverVersion: string; clientVersion: string }> {
+  async verifyApiCompatibility(): Promise<{
+    compatible: boolean;
+    serverVersion: string;
+    clientVersion: string;
+  }> {
     if (!this.apiBaseUrl) {
       return { compatible: true, serverVersion: 'N/A', clientVersion: this.apiVersion };
     }
@@ -501,7 +523,14 @@ export class TrustFlowClient {
     const account = this.accounts.require(options.account);
     try {
       return await withTransientRetry(
-        () => fetchAccountInfo(account.address, this.network, this.retryConfig, this.horizonUrl, this.timeoutMs),
+        () =>
+          fetchAccountInfo(
+            account.address,
+            this.network,
+            this.retryConfig,
+            this.horizonUrl,
+            this.timeoutMs,
+          ),
         undefined,
         this.retryConfig,
         'horizon.accountInfo',
@@ -578,6 +607,11 @@ export class TrustFlowClient {
     return this.server;
   }
 
+  /** @internal Returns the tracer used by this client. */
+  getTracer(): Tracer {
+    return this.tracer;
+  }
+
   /**
    * Returns a shared Soroban RPC server instance, constructed on first use.
    *
@@ -605,6 +639,9 @@ export class TrustFlowClient {
    */
   getSorobanServer(): rpc.Server {
     this.sorobanServer ??= new rpc.Server(this.rpcUrl, { allowHttp: Config.isAllowHttp() });
+    installTraceContextInterceptor(
+      this.sorobanServer.httpClient as unknown as import('axios').AxiosInstance,
+    );
     return this.sorobanServer;
   }
 
