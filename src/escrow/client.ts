@@ -9,6 +9,15 @@ import type { HttpInterceptors } from '../utils/interceptors';
 import { buildCreateEscrowArgs, buildClaimArgs, buildFundArgs } from '../contract/build';
 import { simulateTransaction } from '../contract/simulation';
 import { inspectTransactionSignatures } from '../stellar/transaction';
+import type { ParsedEvent } from '../events';
+import {
+  TypedEventEmitter,
+  mapContractEvent,
+ type MilestoneEventHandler,
+  type MilestoneEventMap,
+  type MilestoneEventName,
+  type MilestoneWildcardHandler,
+} from './events';
 
 /** Per-call transport overrides for {@link TrustFlowEscrowClient.getGigs}. */
 export interface GetGigsOptions {
@@ -77,6 +86,8 @@ export class TrustFlowEscrowClient {
     });
     return this.sorobanServerInstance;
   }
+  /** Typed emitter for milestone lifecycle events (#108). */
+  private readonly eventEmitter = new TypedEventEmitter();
 
   constructor(config: ContractConfig, options: TrustFlowEscrowClientOptions = {}) {
     this.contractConfig = config;
@@ -85,6 +96,70 @@ export class TrustFlowEscrowClient {
     this.timeoutMs = options.timeoutMs ?? config.timeoutMs;
     this.retry = options.retry;
     this.interceptors = options.interceptors;
+  }
+
+  /**
+   * Subscribe to a milestone lifecycle event. The event name determines
+   * the payload type at compile time, so TypeScript autocomplete enforces
+   * the correct payload shape. Pass `'*'` to receive every milestone
+   * event. Returns an unsubscribe function.
+   *
+   * @example
+   * ```typescript
+   * const unsub = client.on('milestone:funded', (payload) => {
+   *   console.log(payload.escrowId, payload.amountStroops);
+   * });
+   * unsub();
+   * ```
+   */
+  on<K extends keyof MilestoneEventMap>(
+    event: K,
+    handler: MilestoneEventHandler<K>,
+  ): () => void;
+  /** Subscribe to every milestone event via the `'*'` wildcard. */
+  on(event: '*', handler: MilestoneWildcardHandler): () => void;
+  on<K extends keyof MilestoneEventMap>(
+    event: K | '*',
+    handler: MilestoneEventHandler<K> | MilestoneWildcardHandler,
+  ): () => void {
+    return this.eventEmitter.on(event as K, handler as MilestoneEventHandler<K>);
+  }
+
+  /** Remove a previously registered milestone event handler. */
+  off<K extends keyof MilestoneEventMap>(
+    event: K,
+    handler: MilestoneEventHandler<K>,
+  ): void;
+  /** Remove a wildcard milestone event handler. */
+  off(event: '*', handler: MilestoneWildcardHandler): void;
+  off<K extends keyof MilestoneEventMap>(
+    event: K | '*',
+    handler: MilestoneEventHandler<K> | MilestoneWildcardHandler,
+  ): void {
+    this.eventEmitter.off(event as K, handler as MilestoneEventHandler<K>);
+  }
+
+  /**
+   * Feed a parsed contract event into the client. Milestone lifecycle
+   * events are translated to their SDK counterparts and emitted to
+   * subscribers. Events that are not milestone transitions are ignored.
+   */
+  emitContractEvent(event: ParsedEvent): void {
+    const mapped = mapContractEvent(event);
+    if (!mapped) {
+      return;
+    }
+    this.eventEmitter.emit(mapped.event, mapped.payload as MilestoneEventMap[keyof MilestoneEventMap]);
+  }
+
+  /**
+   * Convenience wrapper that feeds an array of parsed contract events
+   * into {@link emitContractEvent}.
+   */
+  emitContractEvents(events: readonly ParsedEvent[]): void {
+    for (const event of events) {
+      this.emitContractEvent(event);
+    }
   }
 
   /**
@@ -314,7 +389,7 @@ export class TrustFlowEscrowClient {
    *
    * @example
    * ```typescript
-   * const result = await client.fund('esc-123', wallet.publicKey, 50_000_000n, USDC_CONTRACT_ID);
+   * const result = await client.fund('esc-123', wallet.publicKey, 50_000_000n, USD_CONTRACT_ID);
    * if (result.ok) console.log('Funded! tx:', result.data.txHash);
    * ```
    */
@@ -453,57 +528,18 @@ export class TrustFlowEscrowClient {
       }
       query.set('beneficiary', params.beneficiary);
     }
-    if (params.tokenAddress) {
-      if (!STELLAR_ADDRESS_RE.test(params.tokenAddress) && !CONTRACT_ID_RE.test(params.tokenAddress)) {
-        return { ok: false, error: `Invalid tokenAddress: "${params.tokenAddress}"` };
-      }
-      query.set('tokenAddress', params.tokenAddress);
-    }
-    if (params.createdAfter !== undefined) {
-      const dateStr = params.createdAfter instanceof Date
-        ? params.createdAfter.toISOString()
-        : typeof params.createdAfter === 'number'
-          ? new Date(params.createdAfter).toISOString()
-          : String(params.createdAfter);
-      query.set('createdAfter', dateStr);
-    }
-    if (params.createdBefore !== undefined) {
-      const dateStr = params.createdBefore instanceof Date
-        ? params.createdBefore.toISOString()
-        : typeof params.createdBefore === 'number'
-          ? new Date(params.createdBefore).toISOString()
-          : String(params.createdBefore);
-      query.set('createdBefore', dateStr);
-    }
-    if (params.minAmount !== undefined) {
-      query.set('minAmount', String(params.minAmount));
-    }
-    if (params.maxAmount !== undefined) {
-      query.set('maxAmount', String(params.maxAmount));
-    }
-    if (params.sortBy) {
-      query.set('sortBy', params.sortBy);
-    }
-    if (params.sortOrder) {
-      query.set('sortOrder', params.sortOrder);
-    }
 
     const http = createApiHttpClient({
-      baseURL: this.contractConfig.apiBaseUrl,
-      apiKey: this.contractConfig.apiKey,
+      baseUrl: this.contractConfig.apiBaseUrl,
       timeoutMs: options.timeoutMs ?? this.timeoutMs,
       retry: options.retry ?? this.retry,
-      // Per-call overrides win, then the constructor option, then the
-      // contract-wide hooks.
-      interceptors: options.interceptors ?? this.interceptors ?? this.contractConfig.interceptors,
+      interceptors: options.interceptors ?? this.interceptors,
     });
 
     try {
-      const response = await http.get<GigsPage>('/gigs', {
-        params: Object.fromEntries(query.entries()),
-      });
-      return { ok: true, data: response.data };
-    } catch (err: unknown) {
+      const response = await http.get<GigsPage>(`/gigs?${query.toString()}`);
+      return { ok: true, data: response };
+    } catch (err) {
       return { ok: false, error: toApiErrorMessage(err) };
     }
   }
