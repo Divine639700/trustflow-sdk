@@ -12,7 +12,7 @@ Closes #[issue number]
 
 - [ ] Bug fix (non-breaking change that fixes an issue)
 - [ ] New feature (non-breaking change that adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to change)
+- [ ] Breaking change (fix or feature that would cause existing functionality to change — see `docs/VERSIONING.md`; add a `### ⚠️ Breaking Changes` changelog entry and a `docs/UPGRADING.md` section)
 - [ ] Documentation update
 - [ ] Dependency update
 - [ ] Refactor (no functional changes)

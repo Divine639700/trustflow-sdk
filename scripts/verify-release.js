@@ -4,12 +4,14 @@
  * Usage: node scripts/verify-release.js [tag]
  *
  * Fails when the tag (if given), package.json version, SDK_VERSION and the
- * released CHANGELOG.md heading disagree, or when `npm pack` would ship
- * unexpected files or omit the LICENSE.
+ * released CHANGELOG.md heading disagree, when the changelog's breaking-change
+ * flag does not match the version bump (see scripts/release-policy.js), or
+ * when `npm pack` would ship unexpected files or omit the LICENSE.
  */
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { checkBreakingChanges } = require('./release-policy');
 
 const root = path.join(__dirname, '..');
 const tag = process.argv[2];
@@ -32,6 +34,7 @@ const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 if (!new RegExp(`^## \\[${escaped}\\]`, 'm').test(changelog)) {
   errors.push(`CHANGELOG.md has no released heading for ${version}`);
 }
+errors.push(...checkBreakingChanges(changelog, version));
 
 const [pack] = JSON.parse(
   execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
