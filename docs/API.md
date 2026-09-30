@@ -840,6 +840,20 @@ if (!result.ok) {
 }
 ```
 
+### Integer stroop conversion
+
+`toI128ScVal` / `fromI128ScVal` and `toU128ScVal` / `fromU128ScVal`, exported from
+`@trustflow/sdk/utils`, preserve integer stroops exactly through `xdr.ScVal`.
+Encoding accepts `bigint`, safe integer `number`, or a base-10 integer string;
+decoding returns `bigint`. Signed i128 accepts `[-2^127, 2^127 - 1]`, including
+negative values. Unsigned u128 accepts `[0, 2^128 - 1]`.
+
+Invalid input (fractions, nonfinite/unsafe numbers, malformed strings or values
+outside the relevant bounds) throws `TrustFlowError` with `code: 'INVALID_AMOUNT'`.
+Range errors include the rejected value and allowed bounds; unsafe-number errors
+instruct callers to supply a bigint or numeric string. Decimal string bounds are
+validated before BigInt conversion.
+
 ### Error Codes (`TrustFlowErrorCode`) Matrix
 
 The SDK uses `TrustFlowErrorCode` to classify all failure modes. Each error instance provides an actionable `.code`, optional `.field` and `.issues` for validation details, and an underlying `.cause`.
@@ -850,6 +864,7 @@ The SDK uses `TrustFlowErrorCode` to classify all failure modes. Each error inst
 | `CONTRACT_ERROR` | Fatal | Contract invocation | Contract panicked, reverted, or hit host error during execution | Inspect error logs and contract state; do not blindly retry |
 | `INVALID_CONTRACT_CALL` | Fatal | SorobanSpec parser/encoder, contract builders | Method missing in spec, invalid argument count, wrong argument types | Verify contract ABI spec; fix method name or argument shape |
 | `VALIDATION_ERROR` | Fatal | EscrowBuilder, validation utils, client methods | Invalid Stellar address, negative amount, malformed hex/base64 | Check `error.field`; sanitize user input before resubmitting |
+| `INVALID_AMOUNT` | Actionable | i128/u128 conversion helpers | Malformed, unsafe or out-of-range integer stroops | Supply an integer within the stated bounds; use bigint or a decimal string beyond safe-number precision |
 | `UNAUTHORIZED` | Actionable | Wallet connectors, auth verification, disputes | User denied permissions, invalid token, or unauthorized caller | Prompt user to re-authenticate or connect authorized wallet |
 | `NOT_FOUND` | Informational | Escrow queries, resource lookups | Escrow ID, account, or requested state does not exist | Verify resource identifier; ensure transaction has confirmed |
 | `SIMULATION_ERROR` | Fatal / Actionable | TransactionPipeline.simulate, readContractState | Soroban simulation failed, contract trap, or restore required | If `needsRestore`, restore expired state; else fix preconditions |
