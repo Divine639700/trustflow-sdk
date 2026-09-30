@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Versioning strategy and breaking change policy (#239)
+
+- Added `docs/VERSIONING.md`: how semantic versioning applies on `0.x` and from 1.0.0, what the
+  public API covers, what counts as a breaking change, the deprecation policy, and how
+  `CHANGELOG.md` is maintained.
+- Added `docs/UPGRADING.md` with a per-release migration guide template and the table of current
+  deprecations.
+- `scripts/verify-release.js` now fails a release whose `### ⚠️ Breaking Changes` changelog heading
+  does not match the version bump, a 1.0.0+ major release without that heading, or a flagged
+  section that does not link to `docs/UPGRADING.md` (logic in `scripts/release-policy.js`).
+
 ### Horizon URL & Network Passphrase Overrides (#208)
 
 - Added `horizonUrl` and `networkPassphrase` overrides to `ClientConfig` and `ClientConfigSchema`, defaulting to network-derived values.
