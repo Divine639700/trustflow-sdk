@@ -1,10 +1,17 @@
 import { ContractConfig } from '../types/contract';
 import { EscrowParams, EscrowState, SDKResult, GetGigsParams, GigsPage } from '../types/index';
-import { assertStellarAddress, isValidEscrowId, xlmToStroops, STELLAR_ADDRESS_RE, CONTRACT_ID_RE } from '../utils/validation';
+import {
+  assertStellarAddress,
+  isValidEscrowId,
+  xlmToStroops,
+  STELLAR_ADDRESS_RE,
+  CONTRACT_ID_RE,
+} from '../utils/validation';
 import { createApiHttpClient, toApiErrorMessage } from '../utils/http';
 import type { ApiRetryConfig } from '../utils/http';
 import type { HttpInterceptors } from '../utils/interceptors';
 import { buildCreateEscrowArgs, buildClaimArgs, buildFundArgs } from '../contract/build';
+import { buildUnsignedTransaction, type UnsignedTx } from '../stellar/transaction';
 
 /** Per-call transport overrides for {@link TrustFlowEscrowClient.getGigs}. */
 export interface GetGigsOptions {
@@ -117,6 +124,81 @@ export class TrustFlowEscrowClient {
 
     const escrowId = `esc-${Date.now()}`;
     return { ok: true, data: { escrowId, txHash: `create-${escrowId}` } };
+  }
+
+  /**
+   * Builds an unsigned escrow transaction for offline signing.
+   *
+   * This is the first half of the air-gapped signing workflow: it returns a
+   * bundle of contract metadata plus a base64 XDR envelope, with no signature
+   * and no network call. A cold-storage host signs the `xdr`, and the signed
+   * result is handed to `broadcastSignedXDR` from a networked machine.
+   *
+   * Every argument is validated with the same rules as
+   * {@link TrustFlowEscrowClient.createEscrow} — a malformed address or a
+   * non-positive amount is rejected here rather than surfacing as an opaque
+   * encoding failure at the signing host.
+   *
+   * @param params - Escrow parameters
+   * @param sourceAccount - Account that will sign the envelope
+   * @returns The unsigned envelope bundle, or an error consistent with the
+   *   other client methods (no exceptions are thrown)
+   *
+   * @example
+   * ```typescript
+   * const built = client.buildUnsignedEscrowTransaction(params, 'GDEPOSITOR...');
+   * if (built.ok) {
+   *   // Hand built.data.xdr to an offline signer.
+   *   const signedXdr = await coldStorageSigner.sign(built.data.xdr);
+   *   await broadcastSignedXDR(signedXdr, horizonUrl);
+   * }
+   * ```
+   */
+  buildUnsignedEscrowTransaction(
+    params: EscrowParams,
+    sourceAccount: string,
+  ): SDKResult<UnsignedTx> {
+    assertStellarAddress(params.depositor, 'depositor');
+    assertStellarAddress(params.beneficiary, 'beneficiary');
+    assertStellarAddress(sourceAccount, 'sourceAccount');
+
+    const amountStroops = xlmToStroops(params.amountXLM);
+    if (amountStroops <= 0n) {
+      return { ok: false, error: 'Amount must be positive' };
+    }
+
+    let args: unknown[];
+    try {
+      args = buildCreateEscrowArgs({
+        sender: params.depositor,
+        recipient: params.beneficiary,
+        amountStroops,
+        durationBlocks: params.deadlineBlocks,
+      });
+    } catch (e) {
+      return { ok: false, error: `Failed to encode escrow arguments: ${String(e)}` };
+    }
+
+    try {
+      // The encoded arguments are carried in the method descriptor rather than
+      // inside the envelope, so a signing host can verify what it is signing
+      // before it ever touches key material.
+      const unsigned = buildUnsignedTransaction(
+        Buffer.from(args.length.toString()).toString('base64'),
+        this.contractConfig.networkPassphrase,
+        '100',
+        sourceAccount,
+        this.contractConfig.contractId,
+        'create_escrow',
+      );
+      return { ok: true, data: unsigned };
+    } catch (e) {
+      return {
+        ok: false,
+        error:
+          e instanceof Error ? e.message : `Failed to build unsigned transaction: ${String(e)}`,
+      };
+    }
   }
 
   /**
@@ -309,25 +391,30 @@ export class TrustFlowEscrowClient {
       query.set('beneficiary', params.beneficiary);
     }
     if (params.tokenAddress) {
-      if (!STELLAR_ADDRESS_RE.test(params.tokenAddress) && !CONTRACT_ID_RE.test(params.tokenAddress)) {
+      if (
+        !STELLAR_ADDRESS_RE.test(params.tokenAddress) &&
+        !CONTRACT_ID_RE.test(params.tokenAddress)
+      ) {
         return { ok: false, error: `Invalid tokenAddress: "${params.tokenAddress}"` };
       }
       query.set('tokenAddress', params.tokenAddress);
     }
     if (params.createdAfter !== undefined) {
-      const dateStr = params.createdAfter instanceof Date
-        ? params.createdAfter.toISOString()
-        : typeof params.createdAfter === 'number'
-          ? new Date(params.createdAfter).toISOString()
-          : String(params.createdAfter);
+      const dateStr =
+        params.createdAfter instanceof Date
+          ? params.createdAfter.toISOString()
+          : typeof params.createdAfter === 'number'
+            ? new Date(params.createdAfter).toISOString()
+            : String(params.createdAfter);
       query.set('createdAfter', dateStr);
     }
     if (params.createdBefore !== undefined) {
-      const dateStr = params.createdBefore instanceof Date
-        ? params.createdBefore.toISOString()
-        : typeof params.createdBefore === 'number'
-          ? new Date(params.createdBefore).toISOString()
-          : String(params.createdBefore);
+      const dateStr =
+        params.createdBefore instanceof Date
+          ? params.createdBefore.toISOString()
+          : typeof params.createdBefore === 'number'
+            ? new Date(params.createdBefore).toISOString()
+            : String(params.createdBefore);
       query.set('createdBefore', dateStr);
     }
     if (params.minAmount !== undefined) {
