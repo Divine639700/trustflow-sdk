@@ -29,7 +29,8 @@ export type TrustFlowErrorCode =
   | 'UNSUPPORTED_ENVIRONMENT'
   | 'VERSION_MISMATCH'
   | 'USER_REJECTED'
-  | 'STALE_CHALLENGE';
+  | 'STALE_CHALLENGE'
+  | 'DISPUVE_METADATA_UNAVAILABLE';
 
 export class TrustFlowError extends Error {
   readonly code: TrustFlowErrorCode;
@@ -183,6 +184,21 @@ export class TrustFlowError extends Error {
         ? `No account context registered for "${ref}". Call client.accounts.add() first.`
         : 'No account context is active. Call client.useAccount(id) or pass { account } explicitly.',
       'ACCOUNT_NOT_FOUND',
+    );
+  }
+
+  /**
+   * Dispute round metadata could not be loaded from IPFS — either the
+   * response was null/empty, the CID returned a 404, or the payload was
+   * malformed. This is non-fatal for the vote itself, since the on-chain
+   * dispute ID is authoritative, but callers may want to surface it.
+   */
+  static disputeMetadataUnavailable(disputeId: string, detail?: string, cause?: unknown): TrustFlowError {
+    const suffix = detail ? `: ${detail}` : '';
+    return new TrustFlowError(
+      `Dispute metadata unavailable for "${disputeId}"${suffix}`,
+      'DISPUTE_METADATA_UNAVAILABLE',
+      cause,
     );
   }
 }
