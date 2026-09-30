@@ -52,6 +52,47 @@ console.log(`Balance: ${balance} XLM`);
 - `claim(escrowId, claimantAddress)` — beneficiary-side shortcut to withdraw already-cleared escrow funds
 - `getEscrow(id)` — read escrow state from contract
 - `getGigs(params)` — fetch paginated gigs via backend API with automatic retries for transient failures (`429`, `5xx`, network)
+- `buildUnsignedEscrowTransaction(params)` — build an **unsigned** `create_escrow` transaction and
+  return it as base64 XDR plus the network passphrase, for air-gapped signing. The sequence number
+  is fetched from the RPC (a cold-storage signer holds no live sequence) and simulation supplies
+  the auth entries and resource fee, so the envelope is submitable once signed. Returns
+  `SDKResult` like every other method — validation, account-fetch and simulation failures are
+  returned, not thrown.
+
+### Air-gapped (offline) signing
+
+For a signing machine with no network access, split the flow in two. `broadcastSignedXDR` and
+`inspectTransactionSignatures` are exported from `src/stellar/transaction.ts` (and re-exported
+from the package root alongside `submitTransaction`).
+
+```typescript
+// --- online machine ---
+const built = await client.buildUnsignedEscrowTransaction(params);
+if (!built.ok) throw new Error(built.error);
+fs.writeFileSync('escrow.xdr', built.data.xdr);
+
+// --- offline machine (no network) ---
+const signed = TransactionBuilder.fromXDR(fs.readFileSync('escrow.xdr', 'utf8'), networkPassphrase);
+fs.writeFileSync('escrow.signed.xdr', signed.sign(offlineKeypair).toXDR());
+
+// --- back on the online machine ---
+const report = inspectTransactionSignatures(signedXdr);
+if (!report.signed) throw new Error('signing did not take');
+
+const result = await broadcastSignedXDR(signedXdr, horizonUrl);
+```
+
+- `inspectTransactionSignatures(xdr)` — decodes an envelope and reports `signed`, `signatureCount`,
+  `signatureHints` and `feeBump`. It never throws for a well-formed envelope, and throws
+  `SIGNING_ERROR` for a value that is not a transaction at all, so a truncated payload is not
+  mistaken for an unsigned transaction.
+  `signatureHints` are hex **4-byte** hints (Stellar's signature-hint mechanism) and deliberately
+  do **not** identify a signer — a wallet that knows the candidate keys should match them itself.
+- `broadcastSignedXDR(signedXdr, horizonUrl, retry?, timeoutMs?)` — validates the envelope, then
+  submits it with exactly `submitTransaction`'s network, timeout and retry semantics, including
+  the deliberate no-retry rule for a `4xx` or a processed Horizon rejection.
+  An unsigned or malformed envelope throws `SIGNING_ERROR` **before any HTTP request**, so a
+  signing mistake costs no round trip and no fee.
 
 ## disputeEscrow (`src/escrow/dispute.ts`)
 - `disputeEscrow(client, { escrowId, caller, reason })` — raises a dispute directly against the
@@ -874,6 +915,20 @@ if (!result.ok) {
 }
 ```
 
+### Integer stroop conversion
+
+`toI128ScVal` / `fromI128ScVal` and `toU128ScVal` / `fromU128ScVal`, exported from
+`@trustflow/sdk/utils`, preserve integer stroops exactly through `xdr.ScVal`.
+Encoding accepts `bigint`, safe integer `number`, or a base-10 integer string;
+decoding returns `bigint`. Signed i128 accepts `[-2^127, 2^127 - 1]`, including
+negative values. Unsigned u128 accepts `[0, 2^128 - 1]`.
+
+Invalid input (fractions, nonfinite/unsafe numbers, malformed strings or values
+outside the relevant bounds) throws `TrustFlowError` with `code: 'INVALID_AMOUNT'`.
+Range errors include the rejected value and allowed bounds; unsafe-number errors
+instruct callers to supply a bigint or numeric string. Decimal string bounds are
+validated before BigInt conversion.
+
 ### Error Codes (`TrustFlowErrorCode`) Matrix
 
 The SDK uses `TrustFlowErrorCode` to classify all failure modes. Each error instance provides an actionable `.code`, optional `.field` and `.issues` for validation details, and an underlying `.cause`.
@@ -884,6 +939,7 @@ The SDK uses `TrustFlowErrorCode` to classify all failure modes. Each error inst
 | `CONTRACT_ERROR` | Fatal | Contract invocation | Contract panicked, reverted, or hit host error during execution | Inspect error logs and contract state; do not blindly retry |
 | `INVALID_CONTRACT_CALL` | Fatal | SorobanSpec parser/encoder, contract builders | Method missing in spec, invalid argument count, wrong argument types | Verify contract ABI spec; fix method name or argument shape |
 | `VALIDATION_ERROR` | Fatal | EscrowBuilder, validation utils, client methods | Invalid Stellar address, negative amount, malformed hex/base64 | Check `error.field`; sanitize user input before resubmitting |
+| `INVALID_AMOUNT` | Actionable | i128/u128 conversion helpers | Malformed, unsafe or out-of-range integer stroops | Supply an integer within the stated bounds; use bigint or a decimal string beyond safe-number precision |
 | `UNAUTHORIZED` | Actionable | Wallet connectors, auth verification, disputes | User denied permissions, invalid token, or unauthorized caller | Prompt user to re-authenticate or connect authorized wallet |
 | `NOT_FOUND` | Informational | Escrow queries, resource lookups | Escrow ID, account, or requested state does not exist | Verify resource identifier; ensure transaction has confirmed |
 | `SIMULATION_ERROR` | Fatal / Actionable | TransactionPipeline.simulate, readContractState | Soroban simulation failed, contract trap, or restore required | If `needsRestore`, restore expired state; else fix preconditions |
